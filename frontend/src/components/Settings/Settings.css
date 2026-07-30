@@ -1,0 +1,123 @@
+.settings-panel {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 420px;
+  background: #252526;
+  color: #ddd;
+  overflow-y: auto;
+  border-left: 1px solid #333;
+  z-index: 30;
+  padding: 12px;
+  font-size: 13px;
+}
+.sp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.sp-title { font-size: 16px; font-weight: 600; color: #fff; }
+.sp-close {
+  background: transparent;
+  border: none;
+  color: #ddd;
+  font-size: 16px;
+  cursor: pointer;
+}
+.sp-close:hover { color: #fff; }
+.sp-error { color: #f48771; padding: 6px; background: #3c1e1e; border-radius: 4px; margin-bottom: 8px; }
+.sp-status { color: #888; }
+.sp-section {
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: #1e1e1e;
+}
+.sp-section h3 { margin: 0 0 8px; font-size: 13px; color: #4ec9b0; }
+.sp-section label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.sp-section input[type="text"],
+.sp-section input[type="number"],
+.sp-section input[type="password"],
+.sp-section select {
+  background: #2d2d2d;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.sp-footer {
+  position: sticky;
+  bottom: 0;
+  background: #252526;
+  padding: 10px 0;
+  border-top: 1px solid #333;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sp-footer button {
+  background: #0e639c;
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.sp-footer button:disabled { opacity: 0.4; cursor: default; }
+.sp-unsaved { color: #e2c08d; font-size: 11px; }
+.provider-row {
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 8px;
+  background: #2a2a2a;
+}
+.pr-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.pr-enabled {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #555;
+  color: #aaa;
+}
+.pr-enabled.on { background: #2d6a4f; color: #95e1b3; }
+.pr-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.pr-fields { display: flex; flex-direction: column; gap: 6px; }
+.pr-fields label { flex-direction: column; align-items: stretch; font-size: 11px; }
+.pr-key { display: flex; gap: 4px; }
+.pr-key input { flex: 1; }
+.pr-key button {
+  background: #3a3a3a;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 3px;
+  padding: 0 6px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.pr-note { color: #888; font-size: 10px; margin-top: 2px; }
+.pr-actions { margin-top: 6px; text-align: right; }
+.pr-delete {
+  background: #5a2d2d;
+  color: #f48771;
+  border: 1px solid #6a3a3a;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.pr-delete:hover { background: #6a3a3a; }
