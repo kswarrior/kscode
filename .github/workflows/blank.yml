@@ -1,4 +1,4 @@
-Name: Sync ks-code from Hugging Face Bucket
+name: Sync ks-code from Hugging Face Bucket
 
 on:
   workflow_dispatch: # Allows you to trigger this manually from the Actions tab
