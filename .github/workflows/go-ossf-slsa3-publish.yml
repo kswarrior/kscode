@@ -33,7 +33,7 @@ jobs:
           chmod +x kscode
           
           echo "Running kscode..."
-          ./kspanel --port 8080
+          ./kscode --port 8080
           
           echo "Waiting 5 seconds for initialization logs..."
           sleep 25
