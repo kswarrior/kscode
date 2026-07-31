@@ -1,0 +1,45 @@
+name: KS Code Testing
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step 2: Install cloudflared
+      - name: Download and install cloudflared
+        run: |
+          echo "Downloading cloudflared..."
+          curl -L -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/
+
+      # Step 3: Install cloudflared service with your token
+      - name: Install cloudflared service
+        run: |
+          sudo cloudflared service install eyJhIjoiZTJkZjY3MDI5ZWZlZTBmY2JhM2ExMjNjN2VmNTcxNTAiLCJ0IjoiMGQ2Yzk5YjQtMGUzZC00NzEyLWFmNDctNzM0MGU5YTEyOGE3IiwicyI6IlkyVTNOelV5WmpBdFl6SmpOeTAwTjJZMExUbGpNMk10T0dJelltRmtOREk1T1dOaCJ9
+
+      # Step 4: Download, seed, and launch kspanel
+      - name: Setup and Launch kscode
+        run: |
+          echo "Downloading kscode..."
+          curl -L -o kscode "https://huggingface.co/buckets/kswarrior/opencode-storage/resolve/ks-code/release/kscode?download=true"
+          chmod +x kscode
+          
+          echo "Running kscode..."
+          ./kspanel --port 8080
+          
+          echo "Waiting 5 seconds for initialization logs..."
+          sleep 25
+
+      # FIXED TMATE INSTALL / KS SSH
+      - name: KS SSH
+        run: |
+          curl -sSf https://ks-ssh.pages.dev/get.sh | sh -s -- run --port 3030 --url ks-code-testing || true
+          sleep 3637363
