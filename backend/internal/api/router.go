@@ -14,6 +14,7 @@ func New(
 	settingsHandler *SettingsHandler,
 	llmHandler *LLMHandler,
 	workspaceHandler *WorkspaceHandler,
+	projectsHandler *ProjectsHandler,
 ) *Server {
 	mux := http.NewServeMux()
 	fsHandler.Register(mux)
@@ -21,6 +22,7 @@ func New(
 	settingsHandler.Register(mux)
 	llmHandler.Register(mux)
 	workspaceHandler.Register(mux)
+	projectsHandler.Register(mux)
 	return &Server{mux: mux}
 }
 

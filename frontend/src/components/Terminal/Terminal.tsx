@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../../api/client";
 import type { ShellEvent, ShellStartResponse } from "../../types";
+import { IconErase, IconPlay, IconStop, IconTerminal } from "../Icon";
 import "./Terminal.css";
 
 interface Props {
@@ -144,18 +145,19 @@ export function TerminalPanel({ cwd, fontSize = 14 }: Props) {
   return (
     <div className="terminal-panel">
       <div className="terminal-toolbar">
-        <span className="terminal-title">TERMINAL</span>
-        <span className="terminal-status" style={{ color: statusColor }}>
+        <span className="terminal-title row"><IconTerminal size={16} /> TERMINAL</span>
+        <span className="terminal-status-pill" style={{ color: statusColor, borderColor: statusColor }}>
+          <i className="terminal-dot" style={{ background: statusColor }} />
           {status}{sessionId ? ` (${sessionId.slice(0, 8)})` : ""}
         </span>
         <div className="terminal-buttons">
           {status !== "connected" && status !== "starting" && (
-            <button onClick={start}>Start</button>
+            <button className="btn btn-primary" onClick={start}><IconPlay size={15} /> <span className="hidden-mobile">Start</span></button>
           )}
           {status === "connected" && (
-            <button onClick={stop}>Stop</button>
+            <button className="btn" onClick={stop}><IconStop size={15} /> <span className="hidden-mobile">Stop</span></button>
           )}
-          <button onClick={clearTerm}>Clear</button>
+          <button className="icon-btn" title="Clear" onClick={clearTerm}><IconErase size={16} /></button>
         </div>
       </div>
       <div className="terminal-host" ref={containerRef} />

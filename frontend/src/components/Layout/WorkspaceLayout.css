@@ -1,76 +1,122 @@
+/* ============================================================
+   KS Code — app shell, glass header, responsive sidebar/drawer
+   ============================================================ */
+
 .app-shell {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
-  background: #1e1e1e;
-  color: #ddd;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 13px;
   overflow: hidden;
+  color: var(--fg-1);
 }
+
+/* ============================================================
+   Header
+   ============================================================ */
+
 .app-header {
   display: flex;
   align-items: center;
-  height: 36px;
-  padding: 0 12px;
-  background: #2d2d2d;
-  border-bottom: 1px solid #1a1a1a;
-  gap: 12px;
+  gap: 10px;
+  height: var(--header-h);
+  padding: 0 14px;
+  padding-top: var(--safe-top);
   flex: 0 0 auto;
+  border-radius: 0;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: 1px solid var(--glass-border);
+  z-index: 20;
 }
-.header-left { display: flex; align-items: center; }
-.brand {
+
+.app-header .icon-btn { width: 40px; height: 40px; }
+
+.hamburger { display: none; }
+
+.brand { gap: 10px; }
+.brand-text {
+  font-size: 16px;
   font-weight: 700;
-  font-size: 14px;
-  color: #4ec9b0;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
+  color: var(--fg-0);
+  user-select: none;
 }
-.header-nav { margin-left: auto; display: flex; gap: 4px; }
-.header-nav button {
-  background: transparent;
-  color: #c0c0c0;
-  border: none;
-  padding: 4px 10px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 12px;
+
+.header-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-.header-nav button:hover { background: #3a3a3a; color: #fff; }
-.header-nav button.active { background: #0e639c; color: #fff; }
+
+/* ============================================================
+   Body — sidebar + main page area
+   ============================================================ */
+
 .app-body {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  gap: 10px;
+  padding: 10px;
+  padding-bottom: calc(10px + var(--safe-bottom));
 }
+
+/* ----- sidebar (glass panel) ----- */
 .sidebar {
-  flex: 0 0 260px;
+  flex: 0 0 280px;
   display: flex;
   flex-direction: column;
-  background: #252526;
-  border-right: 1px solid #1a1a1a;
   min-width: 0;
+  overflow: hidden;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+          backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--r-md);
 }
+
 .sidebar-tabs {
   display: flex;
-  border-bottom: 1px solid #1a1a1a;
+  align-items: center;
+  gap: 2px;
+  padding: 8px;
   flex: 0 0 auto;
+  border-bottom: 1px solid var(--glass-border);
 }
 .sidebar-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   flex: 1;
   background: transparent;
-  color: #888;
-  border: none;
-  padding: 6px;
+  color: var(--fg-2);
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
   cursor: pointer;
-  font-size: 11px;
-  letter-spacing: 0.5px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  transition: color .15s ease, background .15s ease;
 }
-.sidebar-tabs button:hover { color: #ccc; }
+.sidebar-tabs button:hover { color: var(--fg-0); background: rgba(255, 255, 255, 0.05); }
 .sidebar-tabs button.active {
-  color: #fff;
-  border-bottom: 2px solid #4ec9b0;
+  color: var(--fg-0);
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.10);
 }
+.sidebar-close {
+  flex: 0 0 auto !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+/* ----- main area: pages swap inside ----- */
 .main-panel {
   flex: 1 1 auto;
   display: flex;
@@ -78,15 +124,120 @@
   min-width: 0;
   min-height: 0;
 }
-.editor-area {
-  flex: 1 1 60%;
+.page {
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+          backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--r-md);
 }
-.editor-area.with-terminal {
-  flex: 1 1 60%;
-  border-bottom: 1px solid #1a1a1a;
+
+/* ============================================================
+   Mobile nav drawer (opens from hamburger)
+   ============================================================ */
+
+.mobile-nav-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(6px);
+          backdrop-filter: blur(6px);
+  z-index: 30;
+  animation: fadeIn .18s ease;
 }
-.terminal-area {
-  flex: 0 0 280px;
-  min-height: 120px;
+.mobile-nav {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: min(300px, 82vw);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(40px) saturate(160%);
+          backdrop-filter: blur(40px) saturate(160%);
+  border: 1px solid var(--glass-border-strong);
+  border-left: none;
+  border-radius: 0 var(--r-lg) var(--r-lg) 0;
+  box-shadow: var(--glass-shadow);
+  animation: slideIn .22s ease;
+  z-index: 31;
+}
+.mobile-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  margin-bottom: 8px;
+}
+.mobile-nav-head span { font-size: 15px; font-weight: 700; color: var(--fg-0); }
+.mobile-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-1);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  transition: background .15s ease, color .15s ease;
+}
+.mobile-nav-item:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg-0); }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+
+/* ============================================================
+   Responsive — phone (≤768px)
+   ============================================================ */
+
+@media (max-width: 768px) {
+  .hamburger { display: inline-flex; }
+  .header-nav { gap: 2px; }
+  .header-nav .icon-btn { width: 38px; height: 38px; }
+  .brand-text { display: none; }
+
+  .app-body {
+    flex-direction: column;
+    padding: 8px;
+    gap: 8px;
+  }
+
+  /* sidebar becomes overlay drawer */
+  .sidebar {
+    position: fixed;
+    top: calc(var(--header-h) + var(--safe-top) + 8px);
+    left: 8px; right: 8px;
+    bottom: calc(8px + var(--safe-bottom));
+    width: auto;
+    flex: none;
+    z-index: 18;
+  }
+  .page { flex: 1 1 auto; }
+
+  /* dim the page when drawer is up */
+  .app-shell.has-drawer .main-panel::after {
+    content: "";
+    position: fixed;
+    inset: var(--header-h) 0 0 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 12;
+    animation: fadeIn .18s ease;
+  }
+}
+
+@media (max-width: 420px) {
+  :root { --header-h: 50px; }
 }

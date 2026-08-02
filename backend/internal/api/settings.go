@@ -18,6 +18,7 @@ func (h *SettingsHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings", h.handleSettings)
 	mux.HandleFunc("/api/settings/providers", h.handleProviders)
 	mux.HandleFunc("/api/settings/providers/delete", h.handleDeleteProvider)
+	mux.HandleFunc("/api/settings/providers/models", h.handleProviderModels)
 }
 
 func (h *SettingsHandler) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +72,27 @@ func (h *SettingsHandler) handleDeleteProvider(w http.ResponseWriter, r *http.Re
 	}
 	if err := h.store.DeleteProvider(req.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, h.store.Get())
+}
+
+func (h *SettingsHandler) handleProviderModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req struct {
+		ID     string `json:"id"`
+		Model  string `json:"model"`
+		Action string `json:"action"`
+	}
+	if err := parseJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.store.UpdateProviderModels(req.ID, req.Model, req.Action); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, h.store.Get())

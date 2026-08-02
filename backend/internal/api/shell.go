@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"kscode/internal/shell"
 	"kscode/internal/ws"
@@ -75,7 +76,8 @@ type clientMsg struct {
 }
 
 func (h *ShellHandler) handleWS(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("upgrade") != "websocket" {
+	// Browsers send the upgrade via HTTP headers, not a query param.
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		writeError(w, http.StatusBadRequest, "websocket upgrade required")
 		return
 	}
@@ -85,7 +87,9 @@ func (h *ShellHandler) handleWS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	key := ws.ParseKey(r.Header.Get("Sec-WebSocket-Key"))
+	// r.Header.Get already strips the "Sec-WebSocket-Key: " prefix and returns
+	// only the raw value, so pass it straight into the SHA-1 handshake.
+	key := strings.TrimSpace(r.Header.Get("Sec-WebSocket-Key"))
 	if key == "" {
 		key = "dGhlIHNhbXBsZSBub25jZQ=="
 	}

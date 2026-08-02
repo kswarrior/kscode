@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# rebuild.sh - Build KS Code into ./release/ (clean rebuild every run).
+# rebuild.sh - Build KS Code into a single self-contained binary: ./release/kscode.
 #
-# Release layout:
+# The frontend is built and embedded into the Go binary via go:embed, so the
+# release folder contains exactly one file:
+#
 #   release/
-#     kscode-server        -> the Go binary
-#     web/                 -> the built React app (index.html + assets/)
-#     workspace/           -> empty on-disk workspace the server edits
+#     kscode   -> the Go binary (frontend baked in)
 #
-# Then run it with:
-#   ./release/kscode-server
-#   # open http://localhost:8080
+# Run it:
+#   ./release/kscode                  # listens on :6060
+#   ./release/kscode --port 3837      # listens on :3837
 #
 set -euo pipefail
 
@@ -22,26 +22,25 @@ ROOT="$SCRIPT_DIR"
 BACKEND_DIR="$ROOT/backend"
 FRONTEND_DIR="$ROOT/frontend"
 RELEASE_DIR="$ROOT/release"
+EMBED_DIR="$ROOT/backend/internal/web/dist"
 
 GO_BUILD_FLAGS=(-buildvcs=false)
 
 echo "=============================================="
-echo " KS Code rebuild"
-echo "   root: $ROOT"
-echo "   release: $RELEASE_DIR"
+echo " KS Code rebuild (single binary)"
+echo "   root:   $ROOT"
+echo "   release: $RELEASE_DIR/kscode"
 echo "=============================================="
 
 # ---------------------------------------------------------------
 # 1. Fresh release folder.
 # ---------------------------------------------------------------
-# If release/ already exists (with an old kscode build / library),
-# delete it entirely so we always start from a clean slate.
 if [[ -d "$RELEASE_DIR" ]]; then
   echo "[1/6] Removing existing release folder..."
   rm -rf "$RELEASE_DIR"
 fi
 echo "[1/6] Creating release folder: $RELEASE_DIR"
-mkdir -p "$RELEASE_DIR/web" "$RELEASE_DIR/workspace"
+mkdir -p "$RELEASE_DIR"
 
 # ---------------------------------------------------------------
 # 2. Verify the toolchain is present.
@@ -55,22 +54,9 @@ echo "        node $(node --version)"
 echo "        npm $(npm --version)"
 
 # ---------------------------------------------------------------
-# 3. Build the Go backend binary into release/.
+# 3. Build the frontend bundle into the embed directory.
 # ---------------------------------------------------------------
-echo "[3/6] Building Go backend..."
-(
-  cd "$BACKEND_DIR"
-  # Keep module deps tidy (no-op if go.sum is already accurate).
-  go mod tidy
-  # Compile the server straight into the release folder.
-  go build "${GO_BUILD_FLAGS[@]}" -o "$RELEASE_DIR/kscode-server" ./cmd/server
-)
-echo "        -> $RELEASE_DIR/kscode-server"
-
-# ---------------------------------------------------------------
-# 4. Install frontend deps if needed, then build the web bundle.
-# ---------------------------------------------------------------
-echo "[4/6] Building frontend..."
+echo "[3/6] Building frontend..."
 (
   cd "$FRONTEND_DIR"
 
@@ -91,30 +77,44 @@ echo "[4/6] Building frontend..."
   # Type-check, then bundle. Invoke the bins directly via node so this works
   # even in environments where npm does not create node_modules/.bin symlinks.
   node node_modules/typescript/bin/tsc --noEmit
-
-  # Build to a temp dir then move, so a failed build never leaves a half-written web/.
   rm -rf dist
   node node_modules/vite/bin/vite.js build
 )
-echo "        -> $RELEASE_DIR/web"
+echo "        -> $FRONTEND_DIR/dist"
 
 # ---------------------------------------------------------------
-# 5. Move the freshly built web bundle into release/web.
+# 4. Place the built bundle where go:embed expects it.
 # ---------------------------------------------------------------
-echo "[5/6] Copying web bundle into release/web..."
-# Vite wrote to frontend/dist; relocate it into the release folder.
-rm -rf "$RELEASE_DIR/web"
-mv "$FRONTEND_DIR/dist" "$RELEASE_DIR/web"
+echo "[4/6] Staging frontend for embed..."
+rm -rf "$EMBED_DIR"
+mkdir -p "$(dirname "$EMBED_DIR")"
+mv "$FRONTEND_DIR/dist" "$EMBED_DIR"
+
+# embed.FS requires at least one file; sanity-check it landed.
+if ! ls "$EMBED_DIR"/index.html >/dev/null 2>&1; then
+  echo "error: embed dir missing index.html"; exit 1
+fi
+echo "        -> $EMBED_DIR"
 
 # ---------------------------------------------------------------
-# 6. Sanity-check the release tree.
+# 5. Build the Go backend binary with the frontend embedded.
+# ---------------------------------------------------------------
+echo "[5/6] Building Go backend..."
+(
+  cd "$BACKEND_DIR"
+  go mod tidy
+  go build "${GO_BUILD_FLAGS[@]}" -o "$RELEASE_DIR/kscode" ./cmd/server
+)
+chmod +x "$RELEASE_DIR/kscode"
+echo "        -> $RELEASE_DIR/kscode"
+
+# ---------------------------------------------------------------
+# 6. Sanity-check the release tree (one file expected).
 # ---------------------------------------------------------------
 echo "[6/6] Release tree:"
 (
   cd "$RELEASE_DIR"
-  find . -maxdepth 3 \( -path './web/assets' -prune -o -print \) \
-    | sed 's/^/        /'
-  echo "        web/assets/ ($(ls web/assets 2>/dev/null | wc -l) files)"
+  find . -maxdepth 2 | sed 's/^/        /'
 )
 
 echo "=============================================="
@@ -122,9 +122,6 @@ echo " KS Code build complete"
 echo ""
 echo " Run it:"
 echo "   cd \"$RELEASE_DIR\""
-echo "   KS_STATIC=\"$RELEASE_DIR/web\" \\"
-echo "   KS_WORKSPACE=\"$RELEASE_DIR/workspace\" \\"
-echo "   KS_API_DIR=\"$RELEASE_DIR/data\" \\"
-echo "   ./kscode-server"
-echo " Then open http://localhost:8080"
+echo "   ./kscode                 # http://localhost:6060"
+echo "   ./kscode --port 3837     # http://localhost:3837"
 echo "=============================================="

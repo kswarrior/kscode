@@ -28,6 +28,7 @@ export interface Provider {
   apiKey?: string;
   enabled: boolean;
   note?: string;
+  models?: string[];
 }
 
 export interface AISettings {
@@ -72,6 +73,7 @@ export interface ChatRequest {
   model: string;
   messages: { role: string; content: string }[];
   maxTokens?: number;
+  stream?: boolean;
 }
 
 export interface ChatResponse {

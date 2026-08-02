@@ -4,45 +4,50 @@
   height: 100%;
   overflow: hidden;
   font-size: 13px;
-  color: #ddd;
+  color: var(--fg-1);
 }
 .ft-header {
   display: flex;
   align-items: center;
-  padding: 6px 10px;
-  background: #2d2d2d;
-  border-bottom: 1px solid #1a1a1a;
+  padding: 10px 12px;
   flex: 0 0 auto;
 }
 .ft-title {
   flex: 1;
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  color: #888;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--fg-2);
 }
 .ft-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
   background: transparent;
-  border: none;
-  color: #888;
+  border: 1px solid transparent;
+  color: var(--fg-2);
+  border-radius: var(--r-pill);
   cursor: pointer;
-  font-size: 11px;
+  transition: background .15s ease, color .15s ease;
 }
-.ft-refresh:hover { color: #ddd; }
+.ft-refresh:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg-0); }
+
 .ft-root-label {
-  padding: 4px 10px;
-  font-family: ui-monospace, monospace;
+  padding: 4px 12px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: #6a6a6a;
+  color: var(--fg-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 0 0 auto;
 }
+
 .ft-list, .ft-children {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 6px 10px;
   flex: 1 1 auto;
   overflow-y: auto;
 }
@@ -50,69 +55,97 @@
 .ft-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 4px;
+  gap: 5px;
+  height: 30px;
+  padding: 0 8px;
   cursor: pointer;
   position: relative;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  transition: background .12s ease, border-color .12s ease;
 }
 .ft-row:hover {
-  background: #2a2d2e;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.06);
 }
-.ft-row:hover .ft-actions {
-  opacity: 1;
-}
-.ft-busy {
-  opacity: 0.5;
+.ft-row:hover .ft-actions { opacity: 1; }
+.ft-busy { opacity: 0.5; }
+
+.ft-chevron {
+  width: 14px;
+  flex: 0 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-3);
 }
 .ft-icon {
-  font-size: 12px;
-  width: 16px;
-  text-align: center;
-  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  color: var(--fg-2);
 }
+.ft-icon-dir { color: var(--fg-1); }
+
 .ft-name {
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1 1 auto;
+  color: var(--fg-1);
 }
-.ft-dir { font-weight: 500; color: #cccccc; }
+.ft-dir { font-weight: 600; color: var(--fg-0); }
+
 .ft-actions {
   display: flex;
   gap: 2px;
   opacity: 0;
-  transition: opacity 0.1s;
+  transition: opacity .12s ease;
   flex: 0 0 auto;
 }
 .ft-actions button {
-  background: #3a3a3a;
-  border: 1px solid #444;
-  color: #ccc;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  color: var(--fg-2);
   cursor: pointer;
-  font-size: 10px;
-  width: 18px;
-  height: 16px;
+  width: 22px; height: 20px;
   padding: 0;
-  border-radius: 2px;
+  border-radius: 6px;
   line-height: 1;
+  transition: background .12s ease, color .12s ease;
 }
-.ft-actions button:hover { background: #4a4a4a; color: #fff; }
+.ft-actions button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fg-0);
+}
+
 .ft-rename {
-  background: #1e1e1e;
-  color: #ddd;
-  border: 1px solid #569cd6;
-  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.5);
+  color: var(--fg-0);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--r-sm);
   font-size: 12px;
-  padding: 0 4px;
-  height: 18px;
+  padding: 0 6px;
+  height: 22px;
   flex: 1 1 auto;
   min-width: 0;
+  outline: none;
 }
 .ft-status, .ft-error {
-  padding: 10px;
+  padding: 14px;
   font-size: 12px;
   font-family: ui-monospace, monospace;
+  color: var(--fg-2);
 }
-.ft-error { color: #f48771; }
+.ft-error { color: var(--danger); }
+
+/* touch-friendly on small screens: always show actions */
+@media (max-width: 768px) {
+  .ft-row { height: 36px; }
+  .ft-actions { opacity: 1; }
+}

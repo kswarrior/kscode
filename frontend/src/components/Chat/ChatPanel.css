@@ -1,110 +1,173 @@
 .chat-panel {
-  position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 380px;
-  background: #252526;
-  color: #ddd;
-  border-left: 1px solid #333;
-  z-index: 30;
+  height: 100%;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  font-size: 13px;
+  justify-content: flex-end;
+  border-radius: var(--r-md);
+  overflow: visible;
 }
-.chat-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px;
-  border-bottom: 1px solid #333;
-}
-.chat-title { font-weight: 600; color: #fff; flex: 1; }
-.chat-header button {
-  background: #3a3a3a;
-  color: #ddd;
-  border: 1px solid #444;
-  padding: 2px 8px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 11px;
-}
-.chat-controls {
-  display: flex;
-  gap: 6px;
-  padding: 8px 10px;
-  border-bottom: 1px solid #333;
-}
-.chat-controls select {
-  flex: 1;
-  background: #2d2d2d;
-  color: #ddd;
-  border: 1px solid #444;
-  border-radius: 3px;
-  padding: 3px;
-  font-size: 12px;
-}
-.chat-messages {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 8px 10px;
-  min-height: 0;
-}
-.chat-empty { color: #777; font-style: italic; padding: 8px; }
-.chat-msg {
-  margin-bottom: 10px;
-  border-left: 2px solid #555;
-  padding-left: 8px;
-}
-.chat-msg.user { border-left-color: #4ec9b0; }
-.chat-msg.assistant { border-left-color: #569cd6; }
-.chat-msg.system { border-left-color: #dcdcaa; }
-.chat-role {
-  display: block;
-  font-size: 10px;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 2px;
-}
-.chat-text {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
+
 .chat-error {
-  margin: 0 10px;
-  padding: 6px;
-  background: #3c1e1e;
-  color: #f48771;
-  border-radius: 3px;
+  margin: 0 0 8px;
+  padding: 9px 12px;
+  background: rgba(255, 122, 122, 0.08);
+  border: 1px solid rgba(255, 122, 122, 0.25);
+  color: var(--danger);
+  border-radius: var(--r-sm);
   font-size: 11px;
 }
+
+/* Hidden render surface (no visual chat log) */
+.chat-hidden { display: none; }
+
+/* ----- bottom composer ----- */
+.chat-input-wrap {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+}
+
 .chat-input {
   display: flex;
-  gap: 6px;
-  padding: 8px 10px;
-  border-top: 1px solid #333;
+  gap: 8px;
+  align-items: flex-end;
 }
 .chat-input textarea {
   flex: 1;
-  height: 60px;
-  resize: vertical;
-  background: #1e1e1e;
-  color: #ddd;
-  border: 1px solid #444;
-  border-radius: 3px;
-  padding: 6px;
+  min-height: 56px;
+  max-height: 160px;
+  resize: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg-0);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  padding: 11px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color .15s ease;
+}
+.chat-input textarea:focus { border-color: rgba(255, 255, 255, 0.45); }
+.chat-send {
+  width: 44px;
+  padding: 0 !important;
+  flex: 0 0 44px;
+  height: 44px;
+}
+.chat-stop {
+  background: rgba(255, 122, 122, 0.15);
+  border-color: rgba(255, 122, 122, 0.45);
+  color: var(--danger);
+}
+.chat-stop:hover { background: rgba(255, 122, 122, 0.25); }
+.chat-input button:disabled { opacity: 0.4; cursor: default; }
+
+/* ----- ModelPicker: transparent, minimal, white text ----- */
+.mp {
+  position: relative;
+  align-self: flex-start;
+  display: inline-flex;
+}
+.mp-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
   font-family: inherit;
   font-size: 12px;
-}
-.chat-input button {
-  background: #0e639c;
-  color: #fff;
-  border: none;
-  padding: 6px 14px;
-  border-radius: 3px;
+  line-height: 1;
   cursor: pointer;
-  align-self: flex-end;
+  outline: none;
+  opacity: 0.85;
+  transition: opacity .12s ease;
 }
-.chat-input button:disabled { opacity: 0.4; cursor: default; }
+.mp-trigger:hover { opacity: 1; }
+.mp-trigger .icon,
+.mp-trigger svg { opacity: 0.7; }
+
+.mp-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.mp-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: auto;
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  z-index: 60;
+  border-radius: var(--r-md);
+  animation: mpIn .14s ease;
+}
+@keyframes mpIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.mp-empty { color: var(--fg-3); padding: 8px 10px; font-size: 12px; }
+
+.mp-group { list-style: none; }
+.mp-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px 4px;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  transition: background .12s ease, color .12s ease;
+}
+.mp-group-head:hover { background: rgba(255, 255, 255, 0.06); color: var(--fg-0); }
+.mp-group-head.mp-sel { color: #ffffff; background: rgba(255, 255, 255, 0.10); }
+.mp-group-default {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  border: 1px solid var(--glass-border);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+}
+.mp-group-head.mp-sel .mp-group-default { color: #fff; border-color: rgba(255,255,255,0.4); }
+
+.mp-models { list-style: none; margin: 0; padding: 0 0 4px; }
+.mp-model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px 7px 22px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--fg-1);
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  transition: background .12s ease, color .12s ease;
+}
+.mp-model:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg-0); }
+.mp-model.mp-sel { color: #ffffff; background: rgba(255, 255, 255, 0.10); }
+.mp-check { color: #fff; font-size: 11px; }
+
+@media (max-width: 768px) {
+  .mp-menu { right: 0; left: auto; }
+  .mp-label { max-width: 180px; }
+}

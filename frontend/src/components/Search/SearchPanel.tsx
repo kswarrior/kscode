@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../../api/client";
 import type { SearchResult } from "../../types";
+import { IconFile, IconSearch } from "../Icon";
 import "./SearchPanel.css";
 
 interface Props {
@@ -31,15 +32,18 @@ export function SearchPanel({ onOpen }: Props) {
   return (
     <div className="search-panel">
       <form onSubmit={search} className="search-form">
-        <input
-          autoFocus
-          type="text"
-          placeholder="Search in workspace..."
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <button type="submit" disabled={loading}>
-          {loading ? "..." : "Search"}
+        <div className="search-box">
+          <IconSearch size={16} />
+          <input
+            autoFocus
+            type="text"
+            placeholder="Search in workspace…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+        <button type="submit" className="btn btn-primary" disabled={loading}>
+          {loading ? "…" : "Search"}
         </button>
       </form>
       {error && <div className="search-error">{error}</div>}
@@ -54,7 +58,8 @@ export function SearchPanel({ onOpen }: Props) {
             onClick={() => onOpen(r.path, r.line)}
           >
             <div className="search-path">
-              {r.path}<span className="search-line">:{r.line}</span>
+              <IconFile size={14} />
+              <span className="search-path-text">{r.path}<span className="search-line">:{r.line}</span></span>
             </div>
             <div className="search-preview">{r.preview}</div>
           </div>

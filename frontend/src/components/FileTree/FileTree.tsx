@@ -1,6 +1,17 @@
 import { useState } from "react";
 import type { FileEntry } from "../../types";
 import { api } from "../../api/client";
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconEdit,
+  IconFile,
+  IconFolder,
+  IconFolderOpen,
+  IconPlus,
+  IconRefresh,
+  IconTrash,
+} from "../Icon";
 import "./FileTree.css";
 
 interface Props {
@@ -20,15 +31,9 @@ interface NodeProps {
 }
 
 function TreeIcon({ name, isDir, open }: { name: string; isDir: boolean; open: boolean }) {
-  if (isDir) return <span className="ft-icon">{open ? "\u{1F4C2}" : "\u{1F4C1}"}</span>;
-  const ext = name.split(".").pop()?.toLowerCase();
-  const icon = ext === "go" ? "\u{1F439}"
-    : ext === "ts" || ext === "tsx" ? "\u{1F539}"
-    : ext === "js" || ext === "jsx" ? "\u{1F7E2}"
-    : ext === "json" ? "\u{1F5C3}"
-    : ext === "md" ? "\u{1F4DD}"
-    : "\u{1F4C4}";
-  return <span className="ft-icon">{icon}</span>;
+  if (isDir) return open ? <IconFolderOpen size={15} /> : <IconFolder size={15} />;
+  void name;
+  return <IconFile size={15} />;
 }
 
 function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
@@ -105,7 +110,12 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
   return (
     <li className="ft-node" style={{ paddingLeft: depth * 14 }}>
       <div className={"ft-row" + (busy ? " ft-busy" : "")} onClick={toggle}>
-        <TreeIcon name={node.name} isDir={node.isDir} open={expanded} />
+        <span className="ft-chevron">
+          {node.isDir ? (expanded ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />) : null}
+        </span>
+        <span className={"ft-icon" + (node.isDir ? " ft-icon-dir" : "")}>
+          <TreeIcon name={node.name} isDir={node.isDir} open={expanded} />
+        </span>
         {renaming ? (
           <input
             className="ft-rename"
@@ -124,10 +134,18 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
           </span>
         )}
         <span className="ft-actions">
-          <button title="New folder" onClick={(e) => { e.stopPropagation(); doMkdir(); }}>+</button>
-          <button title="New file" onClick={(e) => { e.stopPropagation(); doNewFile(); }}>+f</button>
-          <button title="Rename" onClick={(e) => { e.stopPropagation(); setRenaming(true); }}>E</button>
-          <button title="Delete" onClick={(e) => { e.stopPropagation(); doDelete(); }}>x</button>
+          <button title="New folder" onClick={(e) => { e.stopPropagation(); doMkdir(); }}>
+            <IconPlus size={14} />
+          </button>
+          <button title="New file" onClick={(e) => { e.stopPropagation(); doNewFile(); }}>
+            <IconFile size={14} />
+          </button>
+          <button title="Rename" onClick={(e) => { e.stopPropagation(); setRenaming(true); }}>
+            <IconEdit size={14} />
+          </button>
+          <button title="Delete" onClick={(e) => { e.stopPropagation(); doDelete(); }}>
+            <IconTrash size={14} />
+          </button>
         </span>
       </div>
       {node.isDir && expanded && node.children && (
@@ -155,9 +173,11 @@ export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Pro
     <div className="filetree">
       <div className="ft-header">
         <span className="ft-title">EXPLORER</span>
-        <button className="ft-refresh" title="Refresh" onClick={() => onRefresh()}>refresh</button>
+        <button className="ft-refresh" title="Refresh" onClick={() => onRefresh()}>
+          <IconRefresh size={15} />
+        </button>
       </div>
-      <div className="ft-root-label" title={root}>{root}</div>
+      <div className="ft-root-label" title={root}>{root || "workspace"}</div>
       <ul className="ft-list">
         <TreeNode node={entry} depth={0} onOpen={onOpen} onRefresh={onRefresh} />
       </ul>

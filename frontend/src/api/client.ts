@@ -74,6 +74,11 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ id }),
       }),
+    updateProviderModels: (id: string, model: string, action: "add" | "remove") =>
+      req<Settings>(`/settings/providers/models`, {
+        method: "POST",
+        body: JSON.stringify({ id, model, action }),
+      }),
   },
 
   shell: {
@@ -91,5 +96,47 @@ export const api = {
   llm: {
     chat: (chatReq: ChatRequest) =>
       req<ChatResponse>("/llm/chat", { method: "POST", body: JSON.stringify(chatReq) }),
+    // Streams a chat request via Server-Sent Events. onDelta is invoked for
+    // each content chunk; onDone on completion; onError with an error message.
+    stream: async (
+      chatReq: ChatRequest,
+      onDelta: (chunk: string) => void,
+      opts?: { signal?: AbortSignal },
+    ): Promise<void> => {
+      const res = await fetch(`${BASE}/llm/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ ...chatReq, stream: true }),
+        signal: opts?.signal,
+      });
+      if (!res.ok || !res.body) {
+        const text = await res.text();
+        let msg = `HTTP ${res.status}`;
+        try { msg = (JSON.parse(text)?.error) ?? msg; } catch { /* keep */ }
+        throw new Error(msg);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          let ev: any;
+          try { ev = JSON.parse(payload); } catch { continue; }
+          if (ev.error) throw new Error(ev.error);
+          if (ev.done) return;
+          if (typeof ev.delta === "string" && ev.delta.length) onDelta(ev.delta);
+        }
+      }
+    },
   },
 };

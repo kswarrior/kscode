@@ -140,11 +140,18 @@ func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
+// ParseKey returns the Sec-WebSocket-Key value. It accepts either a raw
+// HTTP header block (split by CRLF) or a single header value as returned by
+// http.Header.Get. Returns the empty string when no key is present.
 func ParseKey(header string) string {
 	for _, line := range strings.Split(header, "\r\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 		if strings.HasPrefix(strings.ToLower(line), "sec-websocket-key:") {
 			return strings.TrimSpace(line[len("sec-websocket-key:"):])
 		}
 	}
-	return ""
+	return strings.TrimSpace(header)
 }

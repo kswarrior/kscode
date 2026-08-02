@@ -1,3 +1,60 @@
+/* ============================================================
+   KS Code — global tokens, glass primitives, base resets.
+   Theme: pure black primary · white secondary · gray borders.
+   ============================================================ */
+
+:root {
+  /* ---------- pure black scale (primary) ---------- */
+  --black:   #000000;
+  --bg-0:    #000000;
+  --bg-1:    #0a0a0a;
+  --bg-2:    #111111;
+  --bg-3:    #161616;
+
+  /* ---------- gray scale (borders, dividers) ---------- */
+  --g-1: #1a1a1a;
+  --g-2: #242424;
+  --g-3: #2e2e2e;
+  --g-4: #3a3a3a;
+  --g-5: #555555;
+  --g-6: #777777;
+
+  /* ---------- white scale (secondary) ---------- */
+  --w-low:  rgba(255, 255, 255, 0.35);
+  --w-mid:  rgba(255, 255, 255, 0.60);
+  --w-high: rgba(255, 255, 255, 0.92);
+  --w:      #ffffff;
+
+  /* ---------- glass tokens ---------- */
+  --glass-bg:        rgba(14, 14, 14, 0.55);
+  --glass-bg-strong: rgba(0, 0, 0, 0.78);
+  --glass-border:        rgba(255, 255, 255, 0.08);
+  --glass-border-strong: rgba(255, 255, 255, 0.16);
+  --glass-shadow:        0 8px 32px rgba(0, 0, 0, 0.7),
+                         inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  /* ---------- text ---------- */
+  --fg-0: #ffffff;
+  --fg-1: rgba(255, 255, 255, 0.90);
+  --fg-2: rgba(255, 255, 255, 0.62);
+  --fg-3: rgba(255, 255, 255, 0.40);
+
+  /* ---------- semantic ---------- */
+  --danger: #ff7a7a;
+  --success: #b6e8c4;
+  --warn: #f0c98a;
+
+  /* ---------- metrics ---------- */
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-pill: 999px;
+
+  --header-h: 60px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top:    env(safe-area-inset-top, 0px);
+}
+
 * { box-sizing: border-box; }
 
 html, body, #root {
@@ -5,17 +62,170 @@ html, body, #root {
   padding: 0;
   height: 100%;
   width: 100%;
+  overflow: hidden;
 }
+
+html { -webkit-text-size-adjust: 100%; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: #ddd;
-  background: #1e1e1e;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+    Helvetica, Arial, sans-serif;
+  color: var(--fg-1);
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Pure black primary with subtle white glows so glassmorphism blur is visible. */
+  background-color: #000;
+  background-image:
+    radial-gradient(1100px 700px at 15% -5%,  rgba(255, 255, 255, 0.05), transparent 65%),
+    radial-gradient(900px  500px at 105% 20%, rgba(255, 255, 255, 0.04), transparent 65%),
+    radial-gradient(700px  450px at 50% 110%, rgba(255, 255, 255, 0.03), transparent 65%);
+  background-attachment: fixed;
 }
 
+/* ---------- scrollbars (dark gray) ---------- */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #1e1e1e; }
-::-webkit-scrollbar-thumb { background: #424242; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #4f4f4f; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.20); background-clip: padding-box; }
+
+/* ============================================================
+   Glass primitives (real glassmorphism with backdrop-blur)
+   ============================================================ */
+
+.glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+          backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--r-md);
+}
+
+.glass-strong {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(40px) saturate(160%);
+          backdrop-filter: blur(40px) saturate(160%);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--r-md);
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg-0);
+  border-radius: var(--r-pill);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .1s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--glass-border-strong); }
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: .35; cursor: default; }
+
+/* Primary action — pure white */
+.btn-primary {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #000000;
+  font-weight: 600;
+}
+.btn-primary:hover { background: #e8e8e8; border-color: #e8e8e8; }
+.btn-primary:disabled { background: rgba(255,255,255,0.3); border-color: transparent; color: #000; }
+
+.btn-ghost { background: transparent; border-color: transparent; }
+.btn-ghost:hover { background: rgba(255, 255, 255, 0.06); }
+
+/* round icon button */
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-2);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.icon-btn:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg-0); }
+.icon-btn.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fg-0);
+  border-color: rgba(255, 255, 255, 0.20);
+}
+
+/* ============================================================
+   Form fields
+   ============================================================ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+.field input[type="text"],
+.field input[type="number"],
+.field input[type="password"],
+.field select,
+.field textarea {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg-0);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color .15s ease, background .15s ease;
+  width: 100%;
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ============================================================
+   Layout helpers
+   ============================================================ */
+
+.row { display: flex; align-items: center; gap: 10px; }
+.col { display: flex; flex-direction: column; gap: 10px; }
+.spacer { flex: 1 1 auto; }
+.muted { color: var(--fg-2); }
+.hidden-mobile { display: initial; }
+.visible-mobile { display: none; }
+
+@media (max-width: 768px) {
+  :root { --header-h: 54px; }
+  .hidden-mobile { display: none !important; }
+  .visible-mobile { display: initial; }
+}

@@ -10,12 +10,13 @@ import (
 )
 
 type Provider struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	BaseURL  string `json:"baseUrl,omitempty"`
-	APIKey   string `json:"apiKey,omitempty"`
-	Enabled  bool   `json:"enabled"`
-	Note     string `json:"note,omitempty"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	BaseURL  string   `json:"baseUrl,omitempty"`
+	APIKey   string   `json:"apiKey,omitempty"`
+	Enabled  bool     `json:"enabled"`
+	Note     string   `json:"note,omitempty"`
+	Models   []string `json:"models,omitempty"`
 }
 
 type AISettings struct {
@@ -124,6 +125,51 @@ func (s *Store) DeleteProvider(id string) error {
 		}
 	}
 	s.s.AI.Providers = out
+	return s.save()
+}
+
+// UpdateProviderModels adds or removes a model name on the provider with the
+// given id. action must be "add" or "remove". Adding a duplicate name is a
+// no-op; removing a missing name is a no-op.
+func (s *Store) UpdateProviderModels(id, model, action string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return errors.New("model name required")
+	}
+	if action != "add" && action != "remove" {
+		return errors.New(`action must be "add" or "remove"`)
+	}
+	found := false
+	for i := range s.s.AI.Providers {
+		if s.s.AI.Providers[i].ID != id {
+			continue
+		}
+		found = true
+		models := s.s.AI.Providers[i].Models
+		if action == "add" {
+			for _, m := range models {
+				if m == model {
+					return nil
+				}
+			}
+			models = append(models, model)
+		} else {
+			out := models[:0]
+			for _, m := range models {
+				if m != model {
+					out = append(out, m)
+				}
+			}
+			models = out
+		}
+		s.s.AI.Providers[i].Models = models
+		break
+	}
+	if !found {
+		return errors.New("provider not found: " + id)
+	}
 	return s.save()
 }
 
