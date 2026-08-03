@@ -136,7 +136,18 @@ export function IconFolderOpen(props: IconProps) {
     <svg {...base(props.size)} {...props}>
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2H5a2 2 0 0 0-2 2z" />
       <path d="M5 9h14l-2 9a2 2 0 0 1-2 2H5z" />
-   </svg>
+    </svg>
+  );
+}
+
+export function IconProjects(props: IconProps) {
+  return (
+    <svg {...base(props.size)} {...props}>
+      <rect x="3" y="4" width="7" height="7" rx="1.5" />
+      <rect x="3" y="13" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="8" height="7" rx="1.5" />
+      <rect x="13" y="13" width="8" height="7" rx="1.5" />
+    </svg>
   );
 }
 
@@ -196,7 +207,25 @@ export function IconSend(props: IconProps) {
   return (
     <svg {...base(props.size)} {...props}>
       <path d="M4 12l16-8-6 18-3-8z" />
-   </svg>
+    </svg>
+  );
+}
+
+export function IconMoreVertical(props: IconProps) {
+  return (
+    <svg {...base(props.size)} {...props}>
+      <circle cx="12" cy="5" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="12" cy="19" r="1.5" />
+    </svg>
+  );
+}
+
+export function IconCheck(props: IconProps) {
+  return (
+    <svg {...base(props.size)} {...props}>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
   );
 }
 

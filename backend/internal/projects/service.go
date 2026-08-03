@@ -56,27 +56,53 @@ func (s *Store) Get(id string) (Project, bool) {
 	return Project{}, false
 }
 
-func (s *Store) Add(name, path string) (Project, error) {
+// Add stores a project entry pointing at path. When create is true, the path
+// is created (with parents) when it does not exist; otherwise the path must
+// already be an existing directory.
+// After Add, the project is a candidate for "active"; the active project is
+// re-evaluated lazily by Active()/SetActive().
+func (s *Store) Add(name, path string, create bool) (Project, error) {
 	name = filepath.Clean(name)
 	path = filepath.Clean(path)
-	if name == "" || path == "" || path == "." {
-		return Project{}, errors.New("name and path required")
+	if name == "" || name == "." {
+		return Project{}, errors.New("name required")
+	}
+	if path == "" || path == "." {
+		return Project{}, errors.New("path required")
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return Project{}, err
 	}
-	if info, err := os.Stat(abs); err != nil {
-		return Project{}, errors.New("project path not found: " + abs)
-	} else if !info.IsDir() {
+	info, statErr := os.Stat(abs)
+	if statErr != nil {
+		if !create {
+			return Project{}, errors.New("project path not found: " + abs)
+		}
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			return Project{}, err
+		}
+		info, statErr = os.Stat(abs)
+		if statErr != nil {
+			return Project{}, statErr
+		}
+	}
+	if !info.IsDir() {
 		return Project{}, errors.New("project path is not a directory: " + abs)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// de-dupe by absolute path
-	for _, p := range s.projects {
-		if filepath.Clean(p.Path) == abs {
-			return p, nil
+	for i := range s.projects {
+		if filepath.Clean(s.projects[i].Path) == abs {
+			// update name in place if it changed
+			if s.projects[i].Name != name {
+				s.projects[i].Name = name
+				if err := s.save(); err != nil {
+					return Project{}, err
+				}
+			}
+			return s.projects[i], nil
 		}
 	}
 	p := Project{
@@ -90,6 +116,49 @@ func (s *Store) Add(name, path string) (Project, error) {
 		s.activeID = p.ID
 	}
 	return p, s.save()
+}
+
+// Rename updates the display name and/or path of an existing project.
+// When newPath is provided and create is true, the new path is created if
+// missing. The old on-disk directory is NOT moved.
+func (s *Store) Rename(id, newName, newPath string, create bool) (Project, error) {
+	if id == "" {
+		return Project{}, errors.New("id required")
+	}
+	if newName == "" && newPath == "" {
+		return Project{}, errors.New("nothing to rename")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, p := range s.projects {
+		if p.ID != id {
+			continue
+		}
+		if newName != "" {
+			p.Name = newName
+		}
+		if newPath != "" {
+			abs, err := filepath.Abs(filepath.Clean(newPath))
+			if err != nil {
+				return Project{}, err
+			}
+			info, statErr := os.Stat(abs)
+			if statErr != nil {
+				if !create {
+					return Project{}, errors.New("project path not found: " + abs)
+				}
+				if err := os.MkdirAll(abs, 0o755); err != nil {
+					return Project{}, err
+				}
+			} else if !info.IsDir() {
+				return Project{}, errors.New("project path is not a directory: " + abs)
+			}
+			p.Path = abs
+		}
+		s.projects[i] = p
+		return p, s.save()
+	}
+	return Project{}, errors.New("project not found: " + id)
 }
 
 func (s *Store) Remove(id string) error {

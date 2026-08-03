@@ -7,6 +7,8 @@ import type {
   ShellStartResponse,
   ChatRequest,
   ChatResponse,
+  Project,
+  Chat,
 } from "../types";
 
 const BASE = "/api";
@@ -30,6 +32,68 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => req<{ status: string }>(`/health`),
+
+  projects: {
+    list: () => req<{ projects: Project[] }>(`/projects`),
+    add: (name: string, path: string, create?: boolean) =>
+      req<Project>(`/projects`, {
+        method: "POST",
+        body: JSON.stringify({ name, path, create: !!create }),
+      }),
+    rename: (id: string, patch: { name?: string; path?: string; create?: boolean }) =>
+      req<Project>(`/projects/rename`, {
+        method: "POST",
+        body: JSON.stringify({ id, ...patch }),
+      }),
+    remove: (id: string) =>
+      req<{ projects: Project[] }>(`/projects/delete`, {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      }),
+    active: () => req<{ project: Project | null }>(`/projects/active`),
+    setActive: (id: string) =>
+      req<Project>(`/projects/active`, {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      }),
+  },
+
+  chats: {
+    list: (projectId: string) =>
+      req<{ chats: Chat[] }>(`/chats?projectId=${encodeURIComponent(projectId)}`),
+    one: (projectId: string, chatId: string) =>
+      req<Chat>(`/chats/one?projectId=${encodeURIComponent(projectId)}&chatId=${encodeURIComponent(chatId)}`),
+    create: (projectId: string) =>
+      req<Chat>(`/chats/create`, {
+        method: "POST",
+        body: JSON.stringify({ projectId }),
+      }),
+    rename: (projectId: string, chatId: string, title: string) =>
+      req<Chat>(`/chats/rename`, {
+        method: "POST",
+        body: JSON.stringify({ projectId, chatId, title }),
+      }),
+    meta: (projectId: string, chatId: string, provider: string, model: string) =>
+      req<Chat>(`/chats/meta`, {
+        method: "POST",
+        body: JSON.stringify({ projectId, chatId, provider, model }),
+      }),
+    append: (
+      projectId: string,
+      chatId: string,
+      role: "user" | "assistant" | "system",
+      content: string,
+    ) =>
+      req<Chat>(`/chats/append`, {
+        method: "POST",
+        body: JSON.stringify({ projectId, chatId, role, content }),
+      }),
+    remove: (projectId: string, chatId: string) =>
+      req<{ chats: Chat[] }>(`/chats/delete`, {
+        method: "POST",
+        body: JSON.stringify({ projectId, chatId }),
+      }),
+  },
 
   files: {
     tree: (path = "/", depth = 8) =>

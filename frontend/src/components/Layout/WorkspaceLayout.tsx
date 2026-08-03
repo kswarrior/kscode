@@ -1,18 +1,23 @@
 import { useEffect, useState } from "react";
 import { useWorkspace } from "../../hooks/useWorkspace";
 import { useSettings } from "../../hooks/useSettings";
+import { useProjects } from "../../hooks/useProjects";
 import { FileTree } from "../FileTree/FileTree";
 import { CodeEditor } from "../Editor/Editor";
 import { TerminalPanel } from "../Terminal/Terminal";
 import { SettingsPanel } from "../Settings/Settings";
 import { ChatPanel } from "../Chat/ChatPanel";
+import { ProjectsPanel } from "../Projects/Projects";
+import { ProjectView } from "../ProjectView/ProjectView";
 import { SearchPanel } from "../Search/SearchPanel";
+import type { Project } from "../../types";
 import {
   IconChat,
   IconClose,
   IconFiles,
   IconLogo,
   IconMenu,
+  IconProjects,
   IconRefresh,
   IconSearch,
   IconSettings,
@@ -22,18 +27,20 @@ import "./WorkspaceLayout.css";
 
 type SidebarTab = "explorer" | "search";
 // Which "page" is shown in the main area. Header + sidebar persist across pages.
-type MainPage = "editor" | "terminal" | "chat" | "settings";
+type MainPage = "projects" | "project" | "chat-detail" | "editor" | "terminal" | "chat" | "settings";
 
 export function WorkspaceLayout() {
   const ws = useWorkspace();
   const { settings, reload: reloadSettings } = useSettings();
+  const projects = useProjects();
   const [activePath, setActivePath] = useState<string | null>(null);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("explorer");
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // Chat is the default page when the app opens.
-  const [mainPage, setMainPage] = useState<MainPage>("chat");
+  // Projects is the landing page; users open a project then go to chat/editor.
+  const [mainPage, setMainPage] = useState<MainPage>("projects");
   const [isMobile, setIsMobile] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [activeChat, setActiveChat] = useState<{ id: string; title: string; projectId: string } | null>(null);
 
   // responsive detection
   useEffect(() => {
@@ -57,6 +64,14 @@ export function WorkspaceLayout() {
     return () => window.removeEventListener("keydown", h);
   }, [mobileNavOpen]);
 
+  // When the active project changes, the backend FS root moves with it, so
+  // re-fetch the file tree and clear the open file.
+  useEffect(() => {
+    setActivePath(null);
+    ws.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects.active?.id]);
+
   const ui = settings?.ui ?? null;
   const handleOpen = (path: string) => {
     setActivePath(path);
@@ -70,8 +85,25 @@ export function WorkspaceLayout() {
     if (isMobile) setSidebarOpen(false);
   };
 
-  const onReload = () => { ws.refresh(); reloadSettings(); };
+  const onOpenProject = (_p: Project) => {
+    // After opening a project, jump to its detail page (chat list).
+    setSidebarTab("explorer");
+    setMainPage("project");
+    setActiveChat(null);
+    if (isMobile) setSidebarOpen(false);
+  };
+
+  const onOpenChat = (projectId: string, chatId: string, chatTitle: string) => {
+    setActiveChat({ id: chatId, title: chatTitle, projectId });
+    setMainPage("chat-detail");
+    if (isMobile) setSidebarOpen(false);
+  };
+
+  const onReload = () => { ws.refresh(); reloadSettings(); projects.reload(); };
   const sidebarActive = sidebarOpen && (sidebarTab === "explorer" ? "explorer" : "search");
+
+  // Project name shown in the brand area when one is open.
+  const activeName = projects.active?.name;
 
   return (
     <div className={"app-shell" + (isMobile && sidebarOpen ? " has-drawer" : "")}>
@@ -88,14 +120,24 @@ export function WorkspaceLayout() {
         <div className="brand row">
           <IconLogo />
           <span className="brand-text">KS Code</span>
+          {activeName && <span className="brand-project" title={projects.active?.path}>{activeName}</span>}
         </div>
 
         <nav className="header-nav">
           <button
-            className={"icon-btn" + (mainPage === "chat" ? " active" : "")}
-            onClick={() => setMainPage("chat")}
+            className={"icon-btn" + (mainPage === "projects" ? " active" : "")}
+            onClick={() => setMainPage("projects")}
+            aria-label="Projects"
+            title="Projects"
+          >
+            <IconProjects />
+          </button>
+          <button
+            className={"icon-btn" + (mainPage === "chat" || mainPage === "project" ? " active" : "")}
+            onClick={() => setMainPage(projects.active ? "project" : "chat")}
             aria-label="AI Chat"
             title="AI Chat"
+            disabled={!projects.active}
           >
             <IconChat />
           </button>
@@ -156,7 +198,14 @@ export function WorkspaceLayout() {
                 <IconClose />
               </button>
             </div>
-            <button className="mobile-nav-item" onClick={() => { setMainPage("chat"); setMobileNavOpen(false); }}>
+            <button className="mobile-nav-item" onClick={() => { setMainPage("projects"); setMobileNavOpen(false); }}>
+              <IconProjects /> <span>Projects</span>
+            </button>
+            <button
+              className="mobile-nav-item"
+              onClick={() => { setMainPage(projects.active ? "project" : "chat"); setMobileNavOpen(false); }}
+              disabled={!projects.active}
+            >
               <IconChat /> <span>AI Chat</span>
             </button>
             <button className="mobile-nav-item" onClick={() => { setMainPage("terminal"); setMobileNavOpen(false); }}>
@@ -220,6 +269,28 @@ export function WorkspaceLayout() {
 
         <main className="main-panel">
           {/* All pages share the same header + sidebar; only main area swaps. */}
+          {mainPage === "projects" && (
+            <div className="page page-projects glass">
+              <ProjectsPanel onOpenProject={onOpenProject} />
+            </div>
+          )}
+          {mainPage === "project" && projects.active && (
+            <div className="page page-project glass">
+              <ProjectView
+                project={projects.active}
+                onBack={() => setMainPage("projects")}
+                onOpenChat={onOpenChat}
+              />
+            </div>
+          )}
+          {mainPage === "chat-detail" && activeChat && (
+            <div className="page page-chat-detail glass">
+              <ChatPanel
+                project={{ id: activeChat.projectId, name: projects.active?.name ?? "", path: projects.active?.path ?? "" }}
+                chat={{ id: activeChat.id, title: activeChat.title, messages: [] }}
+              />
+            </div>
+          )}
           {mainPage === "editor" && (
             <div className="page page-editor glass">
               <CodeEditor filePath={activePath} ui={ui} />
@@ -232,16 +303,16 @@ export function WorkspaceLayout() {
           )}
           {mainPage === "chat" && (
             <div className="page page-chat glass">
-              <ChatPanel />
-         </div>
+              <ChatPanel project={projects.active ?? undefined} />
+            </div>
           )}
           {mainPage === "settings" && (
             <div className="page page-settings glass">
               <SettingsPanel />
-         </div>
+            </div>
           )}
-      </main>
+        </main>
+      </div>
     </div>
-  </div>
   );
 }

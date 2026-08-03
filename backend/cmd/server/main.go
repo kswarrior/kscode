@@ -20,6 +20,7 @@ import (
 	fsSvc "kscode/internal/fs"
 	"kscode/internal/llm"
 	"kscode/internal/projects"
+	"kscode/internal/chats"
 	"kscode/internal/settings"
 	"kscode/internal/shell"
 	"kscode/internal/web"
@@ -101,6 +102,11 @@ func main() {
 		log.Fatalf("projects store: %v", err)
 	}
 
+	chatsStore, err := chats.NewStore(cfg.APIDir)
+	if err != nil {
+		log.Fatalf("chats store: %v", err)
+	}
+
 	current := cfgStore.Get()
 
 	// Root resolver: returns the active project's path when one is open,
@@ -129,9 +135,10 @@ func main() {
 		func() string { return cfgStore.Get().APIDir },
 		func() string { return cfgStore.Get().StaticDir },
 	)
-	projectsHandler := api.NewProjectsHandler(projectsStore)
+	projectsHandler := api.NewProjectsHandler(projectsStore, chatsStore)
+	chatsHandler := api.NewChatsHandler(chatsStore)
 
-	server := api.New(filesHandler, shellHandler, settingsHandler, llmHandler, workspaceHandler, projectsHandler)
+	server := api.New(filesHandler, shellHandler, settingsHandler, llmHandler, workspaceHandler, projectsHandler, chatsHandler)
 
 	allowed := map[string]bool{}
 	for _, o := range current.AllowedOrigins {

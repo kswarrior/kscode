@@ -82,3 +82,25 @@ export interface ChatResponse {
   content: string;
   raw?: string;
 }
+
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface Chat {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  model?: string;
+  provider?: string;
+  messages?: ChatMessage[];
+}

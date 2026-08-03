@@ -4,21 +4,24 @@ import (
 	"net/http"
 	"strings"
 
+	"kscode/internal/chats"
 	"kscode/internal/projects"
 )
 
 type ProjectsHandler struct {
-	store *projects.Store
+	store  *projects.Store
+	chats  *chats.Store
 }
 
-func NewProjectsHandler(store *projects.Store) *ProjectsHandler {
-	return &ProjectsHandler{store: store}
+func NewProjectsHandler(store *projects.Store, chatsStore *chats.Store) *ProjectsHandler {
+	return &ProjectsHandler{store: store, chats: chatsStore}
 }
 
 func (h *ProjectsHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects", h.handleCollection)
 	mux.HandleFunc("/api/projects/active", h.handleActive)
 	mux.HandleFunc("/api/projects/delete", h.Delete)
+	mux.HandleFunc("/api/projects/rename", h.handleRename)
 }
 
 // handleCollection handles GET (list) and POST (add by name+path).
@@ -30,14 +33,15 @@ func (h *ProjectsHandler) handleCollection(w http.ResponseWriter, r *http.Reques
 		})
 	case http.MethodPost:
 		var req struct {
-			Name string `json:"name"`
-			Path string `json:"path"`
+			Name   string `json:"name"`
+			Path   string `json:"path"`
+			Create bool   `json:"create"`
 		}
 		if err := parseJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		p, err := h.store.Add(strings.TrimSpace(req.Name), strings.TrimSpace(req.Path))
+		p, err := h.store.Add(strings.TrimSpace(req.Name), strings.TrimSpace(req.Path), req.Create)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -46,6 +50,30 @@ func (h *ProjectsHandler) handleCollection(w http.ResponseWriter, r *http.Reques
 	default:
 		methodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
+}
+
+// handleRename updates name and/or path of an existing project.
+func (h *ProjectsHandler) handleRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		Create  bool   `json:"create"`
+	}
+	if err := parseJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	p, err := h.store.Rename(req.ID, strings.TrimSpace(req.Name), strings.TrimSpace(req.Path), req.Create)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
 }
 
 func (h *ProjectsHandler) handleActive(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +118,9 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Remove(req.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.chats != nil {
+		h.chats.RemoveProject(req.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"projects": h.store.List(),
