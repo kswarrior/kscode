@@ -1,0 +1,42 @@
+{
+  "ai": {
+    "defaultProvider": "gemini",
+    "providers": [
+      {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "enabled": false,
+        "note": "Set GEMINI_API_KEY"
+      },
+      {
+        "id": "nvidia",
+        "name": "NVIDIA NIM",
+        "baseUrl": "https://integrate.api.nvidia.com/v1",
+        "enabled": false,
+        "note": "Set NVIDIA_API_KEY"
+      },
+      {
+        "id": "openai",
+        "name": "OpenAI",
+        "baseUrl": "https://api.openai.com/v1",
+        "enabled": false,
+        "note": "Set OPENAI_API_KEY"
+      },
+      {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "baseUrl": "https://api.anthropic.com/v1",
+        "enabled": false,
+        "note": "Set ANTHROPIC_API_KEY"
+      }
+    ]
+  },
+  "ui": {
+    "theme": "vs-dark",
+    "fontSize": 14,
+    "tabSize": 2,
+    "wordWrap": true,
+    "minimap": true
+  }
+}

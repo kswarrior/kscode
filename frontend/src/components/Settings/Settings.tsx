@@ -18,6 +18,17 @@ export function SettingsPanel() {
   const { settings, loading, error, save, upsertProvider, deleteProvider, updateProviderModels, applyUI, applyAI } = useSettings();
   const [draft, setDraft] = useState<SettingsType | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showConnectDropdown, setShowConnectDropdown] = useState(false);
+  const [showCustomModal, setShowCustomModal] = useState(false);
+  const [customProvider, setCustomProvider] = useState<Partial<Provider>>({
+    name: "",
+    baseUrl: "",
+    apiKey: "",
+    models: [""],
+  });
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<Partial<Provider>>({});
+  const connectDropdownRef = useRef<HTMLDivElement>(null);
 
   // Keep the draft in sync as the canonical settings load/change so the
   // optimistic state always reflects the latest server value when the user
@@ -25,6 +36,16 @@ export function SettingsPanel() {
   useEffect(() => {
     if (settings && !draft) setDraft(settings);
   }, [settings, draft]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (connectDropdownRef.current && !connectDropdownRef.current.contains(e.target as Node)) {
+        setShowConnectDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   if (loading && !draft) {
     return <div className="settings-page"><div className="sp-status">Loading…</div></div>;
@@ -74,35 +95,12 @@ export function SettingsPanel() {
     { value: "hc-black",  label: "High Contrast", description: "Monaco high-contrast" },
   ];
 
-  const [showConnectDropdown, setShowConnectDropdown] = useState(false);
-  const [showCustomModal, setShowCustomModal] = useState(false);
-  const [customProvider, setCustomProvider] = useState<Partial<Provider>>({
-    name: "",
-    baseUrl: "",
-    apiKey: "",
-    models: [""],
-  });
-  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<Partial<Provider>>({});
-
-  const connectDropdownRef = useRef<HTMLDivElement>(null);
-
   const knownProviders = [
     { id: "gemini", name: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", icon: <IconSparkle size={14} /> },
     { id: "nvidia", name: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1", icon: <IconSparkle size={14} /> },
     { id: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1", icon: <IconSparkle size={14} /> },
     { id: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com/v1", icon: <IconSparkle size={14} /> },
   ];
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (connectDropdownRef.current && !connectDropdownRef.current.contains(e.target as Node)) {
-        setShowConnectDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
 
   const handleConnectProvider = (provider: typeof knownProviders[0]) => {
     const existing = current.ai.providers.find((p) => p.id === provider.id);

@@ -1,0 +1,12 @@
+{
+  "addr": ":6060",
+  "workspaceDir": "/test/ks-code/release/workspace",
+  "staticDir": "embedded",
+  "apiDir": "/test/ks-code/release/data",
+  "frontendOrigin": "http://localhost:5173",
+  "allowedOrigins": [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+  ],
+  "env": {}
+}
