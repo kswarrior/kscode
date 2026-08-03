@@ -246,3 +246,23 @@ export function IconLogo(props: IconProps) {
    </svg>
   );
 }
+
+// Animated "thinking" spinner. The CSS animation lives in ChatPanel.css
+// (.icon-spin). Use <IconSpinner /> inside a .thinking-pill for the
+// animated "thinking..." indicator.
+export function IconSpinner(props: IconProps) {
+  return (
+    <svg {...base(props.size)} {...props}>
+      <path d="M21 12a9 9 0 1 1-6.2-8.6" />
+    </svg>
+  );
+}
+
+// Generic "tool" wrench icon for tool-call cards.
+export function IconTool(props: IconProps) {
+  return (
+    <svg {...base(props.size)} {...props}>
+      <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-5.6 5.6 2 2 5.6-5.6a4 4 0 0 0 5.4-5.4l-2.4 2.4-2-2 2.4-2.4z" />
+    </svg>
+  );
+}

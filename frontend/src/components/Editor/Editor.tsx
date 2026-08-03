@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Editor, { OnMount, Monaco } from "@monaco-editor/react";
 import { api } from "../../api/client";
 import type { FileContent, UISettings } from "../../types";
-import { IconLogo, IconSave } from "../Icon";
+import { IconSave } from "../Icon";
 import "./Editor.css";
 
 interface Props {
@@ -95,7 +95,7 @@ export function CodeEditor({ filePath, ui, onSaved }: Props) {
   return (
     <div className="editor-panel">
       <div className="editor-toolbar">
-        <span className="editor-path">{state?.path ?? "no file selected"}</span>
+        <span className="editor-path">{state?.path ?? ""}</span>
         {state?.dirty && <span className="editor-dirty">modified</span>}
         <button
           className="editor-save btn btn-primary"
@@ -110,13 +110,6 @@ export function CodeEditor({ filePath, ui, onSaved }: Props) {
       </div>
       {loading && <div className="editor-status">Loading…</div>}
       {error && <div className="editor-error">Error: {error}</div>}
-      {!filePath && !loading && (
-        <div className="editor-placeholder">
-          <div className="editor-logo"><IconLogo size={48} /></div>
-          <h2>KS Code</h2>
-          <p>Select a file from the Explorer to start editing.</p>
-        </div>
-      )}
       {state && (
         <Editor
           key={state.path}

@@ -2,7 +2,7 @@
 This document is the authoritative map of every source file in the KS Code
 repository together with short notes on what each file does, followed by a
 description of the main runtime flows (file editing, shell execution, AI
-chat, settings).
+chat, settings, projects, chats).
 
 ## 1. Repository at a glance
 ```
@@ -21,8 +21,11 @@ ks-code/
 |     +- fs/service.go        file system operations service
 |     +- shell/service.go     persistent shell session manager
 |     +- settings/service.go  user settings + AI provider key store
-|     +- llm/client.go        LLM client (Gemini native + OpenAI-compat)
+|     +- projects/service.go  project management (name, path, active)
+|     +- chats/service.go     per-project chat history store
+|     +- llm/client.go        LLM client (Gemini native + OpenAI-compat) + streaming
 |     +- ws/conn.go           minimal RFC6455 WebSocket server (no deps)
+|     +- web/embed.go         embedded frontend (go:embed dist)
 |     +- api/                 HTTP handlers and middleware
 |        +- router.go         builds the ServeMux with all handlers
 |        +- middleware.go     CORS, logging, panic-recovery
@@ -31,7 +34,9 @@ ks-code/
 |        +- files.go          file CRUD + search endpoints
 |        +- shell.go          POST /api/shell/start, WS /api/shell/ws
 |        +- settings.go       GET/POST /api/settings, provider upsert/delete
-|        +- llm.go            POST /api/llm/chat
+|        +- llm.go            POST /api/llm/chat, POST /api/llm/stream (SSE)
+|        +- projects.go       GET/POST /api/projects, active, rename, delete
+|        +- chats.go          GET/POST /api/chats per-project CRUD + append
 |
 +- frontend/                 TypeScript + React + Vite SPA
 |  +- package.json           deps: React, @monaco-editor/react, @xterm/*
@@ -45,21 +50,28 @@ ks-code/
 |     +- App.tsx             top-level -> WorkspaceLayout
 |     +- vite-env.d.ts        vite client types
 |     +- styles/global.css   resets + scrollbar styling
-|     +- types/index.ts      shared TS interfaces (FileEntry, Settings, ...)
+|     +- types/index.ts      shared TS interfaces (FileEntry, Settings, Project, Chat, ...)
 |     +- api/client.ts       typed fetch wrapper for every backend endpoint
 |     +- hooks/
 |     |  +- useWorkspace.ts  loads + refreshes the file tree
 |     |  +- useSettings.ts   loads + saves settings / provider keys
+|     |  +- useProjects.ts   loads projects, active project, CRUD operations
 |     +- components/
-|        +- Layout/WorkspaceLayout.tsx(.css)   3-panel app shell
+|        +- Layout/WorkspaceLayout.tsx(.css)   3-panel app shell + project dropdown
 |        +- FileTree/FileTree.tsx(.css)       recursive explorer + actions
 |        +- Editor/Editor.tsx(.css)           Monaco wrapper + Ctrl+S
 |        +- Terminal/Terminal.tsx(.css)       Xterm.js + WS bridge
 |        +- Settings/Settings.tsx(.css)        editor + AI provider config
 |        +- Chat/ChatPanel.tsx(.css)          AI chat prompt/response UI
 |        +- Search/SearchPanel.tsx(.css)      workspace content search
+|        +- ChatsPanel/
+|        |  +- ChatsPanel.tsx(.css)           project-scoped chat list + conversation
+|        |  +- ProjectDropdownMenu.tsx(.css)  header project selector + menu
+|        |  +- ProjectFormDialog.tsx(.css)    add/edit project dialog
+|        |  +- ProjectDropdownMenu.css
+|        |  +- ChatsPanel.css
+|        |  +- ProjectFormDialog.css
 ```
-
 ## 2. Backend file notes
 
 ### backend/go.mod
@@ -68,13 +80,17 @@ ks-code/
   (incl. a hand-written WebSocket implementation in `internal/ws`).
 
 ### backend/cmd/server/main.go - entrypoint
-- Builds the config store, settings store, fs service, shell manager and LLM client
+- Builds the config store, settings store, fs service, shell manager, projects store, chats store and LLM client
 - Constructs every API handler and wires them into one `http.ServeMux` via `api.New`
 - Mounts `/api/` on the API mux and `/` on an SPA handler that serves
   `frontend/dist` with a fallback to index.html for client routing
+- Supports **embedded frontend** (go:embed) for single-binary deploy when `KS_STATIC` not set
 - Wraps the root handler in CORS -> Recoverer -> Logger middleware
 - Listens on `cfg.Addr` and performs graceful shutdown on SIGINT/SIGTERM
 - `spaHandler` serves a static file if present else falls back to index.html
+- `embeddedSpaHandler` serves the embedded frontend assets
+- `rootFn` resolver: returns the active project's path when one is open,
+  otherwise the configured workspace dir; used by file API to sandbox correctly
 
 ### backend/internal/config/config.go - configuration
 - `Config` holds addr, workspace dir, static dir, api data dir, CORS origins, env
@@ -117,13 +133,34 @@ ks-code/
   (keys never leave the server to the browser except through the settings GET,
   which is acceptable for a local single-user tool)
 
+### backend/internal/projects/service.go - project management
+- `Project` = `{ID, Name, Path, CreatedAt}`; stored in `$KS_API_DIR/projects.json` (0600)
+- `Store` with thread-safe mutex; `List()`, `Get(id)`, `Add(name, path, create)`, `Rename(id, newName, newPath, create)`, `Remove(id)`, `Active()`, `SetActive(id)`
+- `Add` deduplicates by absolute path; when `create=true`, the path is created (mkdir -p)
+- `Active()` returns the active project; lazily falls back to first project if none set
+- `SetActive(id)` switches the active project; persisted immediately
+- `Remove(id)` removes project and clears active if it was the active one
+
+### backend/internal/chats/service.go - chat history
+- `Chat` = `{ID, Title, CreatedAt, UpdatedAt, Model, Provider, Messages[]}` per project
+- Persisted to `$KS_API_DIR/chats.json` (0600) as `map[projectID][]Chat`
+- `List(projectID)` returns chats sorted newest first
+- `Create(projectID)` creates a new chat with default title "New chat"
+- `Rename`, `SetMeta(provider, model)`, `AppendMessage(role, content)`, `Remove`, `RemoveProject`
+- `AppendMessage` auto-derives title from first user message if title is still default
+- Thread-safe with mutex; persists on every mutation
+
 ### backend/internal/llm/client.go - LLM forwarding
-- `Client` wraps `*settings.Store` + a 90s `http.Client`
+- `Client` wraps `*settings.Store` + `http.Client` (no overall timeout for streaming)
 - `Chat(ctx, req)` looks up the provider + key, then dispatches:
   - `gemini` -> native Gemini `generateContent` (`?key=...`)
   - `nvidia`/`openai`/`anthropic`/... -> OpenAI-compatible `/chat/completions`
 - Returns `{provider, model, content, raw}` or an error describing the upstream status.
-- Default models are chosen per provider if the request omits one.
+- Default models chosen per provider if the request omits one.
+- **Streaming support**: `StreamChat(ctx, req, onDelta)` for both providers:
+  - OpenAI-compatible: SSE with `data:` lines, emits `Delta{Delta, Done}`
+  - Gemini: `streamGenerateContent?alt=sse`, emits text parts as deltas
+- Falls back to `os.Getenv(providerID + "_API_KEY")` when no key in settings
 
 ### backend/internal/ws/conn.go - WebSocket server
 - Self-contained RFC6455 server (no gorilla/websocket).
@@ -133,10 +170,14 @@ ks-code/
   unmasked payload. `Write(op, data)` sends a server (unmasked) frame.
 - Used only by the websocket fd (`/api/shell/ws`). The HTTP layers use stdlib.
 
+### backend/internal/web/embed.go - embedded frontend
+- `//go:embed all:dist` embeds the entire `frontend/dist` into the binary
+- `FS()` returns the embedded filesystem for the SPA handler
+
 ### backend/internal/api/router.go
 - `Server` wraps a single `http.ServeMux`.
-- `New(fsH, shellH, settingsH, llmH, workspaceH)` instantiates the mux and calls
-  `Register(mux)` on each handler. Handler returns `Handler()`.
+- `New(fsH, shellH, settingsH, llmH, workspaceH, projectsHandler, chatsHandler)`
+  instantiates the mux and calls `Register(mux)` on each handler.
 
 ### backend/internal/api/middleware.go
 - `statusRecorder` captures the status code + body size for logging.
@@ -149,7 +190,7 @@ ks-code/
 
 ### backend/internal/api/util.go
 - `writeJSON` / `writeError` / `parseJSON` - small helpers used by every handler.
-`parseJSON` uses `DisallowUnknownFields` for stricter input validation.
+- `parseJSON` uses `DisallowUnknownFields` for stricter input validation.
 
 ### backend/internal/api/workspace.go
 - `GET /api/health` -> `{status, time, uptime}`.
@@ -187,6 +228,30 @@ ks-code/
 - `POST /api/llm/chat` body `{provider, model, messages, maxTokens?}`.
   Forwards to the `llm.Client`, returns `{provider, model, content, raw?}`.
   Errors (missing key, upstream 4xx/5xx) are returned as a 502 JSON.
+- `POST /api/llm/stream` body `{provider, model, messages, maxTokens?, stream:true}`.
+  Returns Server-Sent Events stream:
+  - `data: {"delta":"..."}` per token
+  - `data: {"done":true}` on completion
+  - `data: {"error":"..."}` on error
+  Used by the frontend for streaming chat responses.
+
+### backend/internal/api/projects.go
+- `GET /api/projects` -> `{projects: []Project}`
+- `POST /api/projects` body `{name, path, create?}` -> adds project (dedupes by path)
+- `POST /api/projects/active` GET -> `{project: Project|null}`; POST `{id}` -> sets active
+- `POST /api/projects/rename` body `{id, name?, path?, create?}` -> updates project
+- `POST /api/projects/delete` body `{id}` -> removes project + its chats
+- Handler ties to `chats.Store` to cascade delete chats when project removed
+
+### backend/internal/api/chats.go
+- `GET /api/chats?projectId=` -> `{chats: []Chat}` (newest first)
+- `GET /api/chats/one?projectId=&chatId=` -> single chat
+- `POST /api/chats/create` body `{projectId}` -> creates new chat
+- `POST /api/chats/rename` body `{projectId, chatId, title}`
+- `POST /api/chats/append` body `{projectId, chatId, role, content}` - persists a turn
+- `POST /api/chats/meta` body `{projectId, chatId, provider, model}` - remembers LLM settings
+- `POST /api/chats/delete` body `{projectId, chatId}` -> removes chat, returns updated list
+- All endpoints validate projectId/chatId and return 400/404 appropriately
 
 ## 3. Frontend file notes
 
@@ -198,6 +263,7 @@ ks-code/
 ### frontend/tsconfig.json + tsconfig.node.json
 - Strict TS targeting ES2022 with bundler module resolution and `react-jsx`.
 - `skipLibCheck` + `resolveJsonModule`; no project references (single root).
+
 ### frontend/vite.config.ts
 - React plugin, output to `dist` (emptyOutDir).
 - Dev server on :5173 with a proxy mapping `/api` -> http://localhost:8080
@@ -216,15 +282,23 @@ ks-code/
 ### frontend/src/types/index.ts
 - All shared interfaces mirroring the backend JSON shapes: `FileEntry`,
   `FileContent`, `SearchResult`, `Provider`, `AISettings`, `UISettings`,
-  `Settings`, `ShellEvent`, `ShellStartResponse`, `ChatRequest`, `ChatResponse`.
+  `Settings`, `ShellEvent`, `ShellStartResponse`, `ChatRequest`, `ChatResponse`,
+  `Project`, `ChatMessage`, `Chat`.
 
 ### frontend/src/api/client.ts
 - `req<T>(path, init)` helper: fetch `${BASE}${path}` with JSON content-type,
   parses text, falls back to raw text, throws `Error(body.error|HTTP n)`.
-- `api` object groups every endpoint (health, files.{tree,read,write,mkdir,
-  remove,rename,search}, settings.{get,save,upsertProvider,deleteProvider},
-  shell.{start, wsUrl}, llm.chat). `shell.wsUrl` builds the WS URL from
-  `window.location` so it works in both dev (proxy) and prod (same-origin).
+- `api` object groups every endpoint:
+  - `projects`: list, add, rename, remove, active, setActive
+  - `chats`: list, one, create, rename, meta, append, remove
+  - `files`: tree, read, write, mkdir, remove, rename, search
+  - `settings`: get, save, upsertProvider, deleteProvider, updateProviderModels
+  - `shell`: start, wsUrl
+  - `llm`: chat, stream (SSE via fetch + ReadableStream)
+- `shell.wsUrl` builds the WS URL from `window.location` so it works in both
+  dev (proxy) and prod (same-origin).
+- `llm.stream` consumes SSE via fetch ReadableStream; invokes `onDelta` per chunk,
+  resolves on `done`, rejects on `error`.
 
 ### frontend/src/hooks/useWorkspace.ts
 - `useState` for root + tree + loading + error.
@@ -236,13 +310,31 @@ ks-code/
 - Exposes `save(settings)`, `upsertProvider(p)`, `deleteProvider(id)`
   that each update local state from the server response.
 
+### frontend/src/hooks/useProjects.ts
+- State: `projects[]`, `active`, `loading`, `error`.
+- `reload()` fetches both list and active project.
+- `add(name, path, create)` -> POST /api/projects -> reload
+- `rename(id, patch)` -> POST /api/projects/rename -> reload
+- `remove(id)` -> POST /api/projects/delete -> updates list + re-fetches active
+- `open(id)` -> POST /api/projects/active -> sets active locally
+- Returns `{projects, active, loading, error, reload, add, rename, remove, open}`
+
 ### frontend/src/components/Layout/WorkspaceLayout.tsx(.css)
-- The 3-region shell: top header (brand + nav buttons), left sidebar
+- The 3-region shell: top header (brand + project dropdown + nav buttons), left sidebar
   (Files/Search tabs), center editor + terminal split, and overlays for
   Settings and Chat (absolutely positioned right drawers).
 - Local UI state: active file path, sidebar/terminal open booleans, which
-  sidebar tab. Wires `useWorkspace` + `useSettings`.
-- `Reload` re-fetches both the tree and settings.
+  sidebar tab, mainPage (chat|editor|settings), mobile nav drawer.
+- Wires `useWorkspace` + `useSettings` + `useProjects`.
+- **Project dropdown** in header (`ProjectDropdownMenu`):
+  - Shows active project name or "Select project"
+  - Dropdown lists all projects with active indicator, click to switch
+  - 3-dot menu per project: Rename, Edit (same dialog), Delete
+  - "Add project" button opens `ProjectFormDialog`
+- **Main page switching** via header icons: Chat (default), Editor, Settings
+- When active project changes, re-fetches file tree and clears open file
+- `ProjectFormDialog` for add/edit project (name, path, create-if-missing checkbox)
+- Mobile responsive: hamburger menu, sidebar as drawer
 
 ### frontend/src/components/FileTree/FileTree.tsx(.css)
 - Recursive `TreeNode` renders icon + name; folders toggle expand, files open.
@@ -289,19 +381,44 @@ ks-code/
   appended locally. Send posts `api.llm.chat` and appends the model reply.
 - Ctrl/Cmd+Enter sends. Errors surface both inline and as an assistant turn.
 
+### frontend/src/components/ChatsPanel/ChatsPanel.tsx(.css)
+- Left panel (replaces file tree when Chat page selected).
+- Top: `ProjectDropdownMenu` to select/switch projects.
+- When no project: empty state with "Add project" button.
+- When project active: "New chat" button + chat list (newest first).
+- Chat items show title; hover reveals Rename + Delete.
+- Click chat -> opens conversation in same panel (replaces list).
+- Conversation view: `ChatPanel` with project + chat context.
+- Back button returns to chat list.
+- Inline rename for chat titles (Enter to save, Escape to cancel).
+- Responsive: on mobile (<768px) the chat list collapses when conversation open.
+
+### frontend/src/components/ChatsPanel/ProjectDropdownMenu.tsx(.css)
+- Trigger button shows active project name (or "Select project") + chevron.
+- Dropdown menu: header with "Projects" title + "Add" button.
+- List of projects: active highlighted with checkmark, shows path on active.
+- 3-dot menu per project: Rename (opens inline rename), Edit (opens dialog), Delete.
+- Click project to switch active (calls `onOpenProject`).
+- Closes on outside click or Escape.
+
+### frontend/src/components/ChatsPanel/ProjectFormDialog.tsx(.css)
+- Modal dialog for add/edit project.
+- Fields: Project name, Project root path.
+- For "add" mode: checkbox "Create this path (mkdir -p) if it does not exist".
+- Validates non-empty name + path; shows server errors inline.
+- Submit calls `onSubmit(name, path, create)` promise.
+
 ### frontend/src/styles/global.css
 - CSS reset, full-height html/body/#root, dark background, custom scrollbars.
 
 ### rebuild.sh - one-shot clean build into release/
 - `set -euo pipefail` bash script; resolves its own dir so it can be run from anywhere.
-- Step 1 deletes any existing `release/` folder (the old KS Code library) and recreates it
-  empty with `web/` and `workspace/` subdirs, guaranteeing a clean rebuild every run.
+- Step 1 deletes any existing `release/` folder and recreates it
+  empty with `web/` and `workspace/` subdirs.
 - Step 2 verifies `go`, `node`, `npm` are on PATH.
 - Step 3 `go mod tidy` + `go build -buildvcs=false -o release/kscode-server ./cmd/server`.
 - Step 4 installs frontend npm deps on first build only, force-chmods the esbuild native
-  binary executable (works around npm not always setting the +x bit), runs `tsc --noEmit`
-  then the Vite production build into `frontend/dist`. Bins are invoked via `node` directly
-  (not `npx`/`npm run`) so it works in envs that lack `node_modules/.bin` symlinks.
+  binary executable, runs `tsc --noEmit` then the Vite production build into `frontend/dist`.
 - Step 5 moves `frontend/dist` into `release/web`.
 - Step 6 prints the resulting release tree.
 - Output layout: `release/kscode-server`, `release/web/`, `release/workspace/` - run via
@@ -321,15 +438,14 @@ ks-code/
 1. TerminalPanel mounts Xterm (FitAddon). Status 'idle'.
 2. User clicks Start -> `api.shell.start({cols, rows, cwd})` -> backend spawns $SHELL.
 3. Backend returns {id, pid, cwd}; UI opens WS to /api/shell/ws?id=...
-4. UI -> WS: {type:'input', data:'ls -la
-'}
+4. UI -> WS: {type:'input', data:'ls -la\n'}
 5. Shell session writes stdin to the process; stdout/stderr pumps emit 'data' events.
 6. Backend -> WS: {type:'data', stream:'stdout', data:'total 4\n...'} (stderr is red-tagged).
 7. term.write renders the bytes; FitAddon keeps the grid sized to the container.
 8. Window resize -> WS {type:'resize', rows, cols} -> backend SIGWINCH -> readline reflows.
 9. When the shell exits, {type:'exit', exit:0} is sent and the WS closes the session.
 
-### Flow C - AI chat
+### Flow C - AI chat (non-streaming)
 1. User opens Chat drawer, picks provider + model, types a prompt.
 2. UI calls `api.llm.chat({provider, model, messages})`.
 3. Backend `llm.Client.Chat`:
@@ -340,7 +456,19 @@ ks-code/
 4. Response content is parsed and `{provider, model, content, raw}` returned to the UI.
 5. UI appends an assistant turn (or an error turn) to the message list.
 
-### Flow D - Settings & API keys
+### Flow D - AI chat (streaming)
+1. User opens Chat page, selects provider + model, types prompt.
+2. ChatPanel calls `api.llm.stream(req, onDelta)`:
+   - POST /api/llm/stream with `stream:true`
+   - Backend `llm.Client.StreamChat`:
+     - OpenAI-compat: POST /chat/completions with stream=true, Accept: text/event-stream
+     - Gemini: POST /models/{model}:streamGenerateContent?alt=sse&key=...
+   - SSE frames parsed: `data: {"delta":"..."}` -> `onDelta(chunk)`
+   - `data: {"done":true}` -> stream resolves
+   - `data: {"error":"..."}` -> stream rejects
+3. Frontend appends deltas to the assistant message in real-time.
+
+### Flow E - Settings & API keys
 1. `useSettings` GETs /api/settings on mount (seeds defaults if no file exists).
 2. User edits UI prefs / enables providers / pastes keys in the Settings drawer.
 3. 'Save Settings' POSTs the whole object -> backend validates, rewrites settings.json (0600).
@@ -349,7 +477,28 @@ ks-code/
 5. Keys are read server-side only; the chat flow fetches the key via settings.Store
    just before sending the upstream request.
 
-### Flow E - Workspace search
+### Flow F - Project management
+1. Header project dropdown shows active project (or "Select project").
+2. User clicks dropdown -> sees all projects with active checkmark.
+3. Click project -> `projects.open(id)` -> POST /api/projects/active -> sets active.
+4. Active project change triggers `useEffect` in WorkspaceLayout:
+   - Clears active file
+   - Calls `ws.refresh()` to reload file tree for new project root
+5. "Add project" -> ProjectFormDialog -> `projects.add(name, path, create)` -> reload
+6. 3-dot menu -> Rename (inline) / Edit (dialog) / Delete (confirm)
+7. Delete calls `projects.remove(id)` -> backend cascades to delete project's chats
+
+### Flow G - Chat history per project
+1. Chat page selected -> `ChatsPanel` loads active project's chats via `api.chats.list(projectId)`.
+2. "New chat" -> `api.chats.create(projectId)` -> creates chat with default title.
+3. Click chat -> `handleOpenChat` -> sets `activeChat` state -> renders `ChatPanel`.
+4. ChatPanel streams via `api.llm.stream` and on completion calls `api.chats.append` for each turn.
+5. Chat metadata (provider, model) saved via `api.chats.meta` when changed.
+6. Chat rename: inline edit in list -> `api.chats.rename`.
+7. Chat delete: confirm -> `api.chats.remove` -> list refreshes.
+8. Back button in conversation -> returns to chat list.
+
+### Flow H - Workspace search
 1. User switches the sidebar to Search, types a query, presses Enter.
 2. UI calls `api.files.search?q=...`; the FS service walks the workspace root
    skipping .git/node_modules/dist and files > 2 MB, scanning line by line.
@@ -362,11 +511,11 @@ cd frontend && npm install && npm run build      # -> dist/
 
 # Backend
 cd backend && go build -buildvcs=false -o kscode ./cmd/server
-./kscode                                          # http://localhost:8080
+./kscode                                          # http://localhost:6060
 
 # Dev (two terminals)
-cd backend && go run -buildvcs=false ./cmd/server  # :8080
-cd frontend && npm run dev                        # :5173 (proxies /api -> :8080)
+cd backend && go run -buildvcs=false ./cmd/server  # :6060
+cd frontend && npm run dev                        # :5173 (proxies /api -> :6060)
 ```
 
 ## 6. Notable design choices
@@ -379,4 +528,11 @@ cd frontend && npm run dev                        # :5173 (proxies /api -> :8080
 - **Keys never hard-coded**: stored in settings.json (0600) and fetched at call time;
   the user can rotate keys without touching source.
 - **Single binary deploy**: in production the Go process serves the React bundle
-  from `frontend/dist`, so the whole app is one executable + one workspace dir.
+  from `frontend/dist` (embedded via go:embed), so the whole app is one executable
+  + one workspace dir.
+- **Project-scoped workspaces**: the active project determines the FS root for file
+  operations, shell cwd, and chat history, enabling multi-project workflows.
+- **Per-project chat persistence**: chats stored in chats.json keyed by project ID,
+  with titles auto-derived from first message and metadata (provider/model) remembered.
+- **Streaming LLM responses**: SSE-based streaming for both OpenAI-compatible and
+  Gemini providers, rendered incrementally in the UI.

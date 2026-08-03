@@ -104,3 +104,44 @@ export interface Chat {
   provider?: string;
   messages?: ChatMessage[];
 }
+
+// ----- Agentic streaming ( /api/agent/run SSE ) -----
+export interface AgentToolCall {
+  id: string;
+  name: string;
+  args: any;
+}
+
+export interface AgentToolResult {
+  id: string;
+  name: string;
+  ok: boolean;
+  output: string;
+}
+
+export type AgentEventTag =
+  | "thinking"
+  | "assistant_delta"
+  | "tool_request"
+  | "tool_result"
+  | "done"
+  | "error";
+
+export interface AgentEvent {
+  tag: AgentEventTag;
+  round?: number;
+  delta?: string;
+  text?: string;
+  tool?: AgentToolCall;
+  result?: AgentToolResult;
+  error?: string;
+}
+
+export interface AgentRunRequest {
+  provider: string;
+  model: string;
+  messages: { role: string; content: string }[];
+  maxRounds?: number;
+  system?: string;
+  cwd?: string;
+}

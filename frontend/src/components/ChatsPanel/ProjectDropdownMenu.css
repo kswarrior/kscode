@@ -1,0 +1,284 @@
+/* ============================================================
+   ProjectDropdownMenu — top-left project selector in chat panel
+   ============================================================ */
+
+.pdm {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 220px;
+  min-width: 120px;
+  max-width: 320px;
+}
+
+.pdm-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px 0 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg-0);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .15s ease, background .15s ease;
+}
+.pdm-trigger:hover { border-color: var(--glass-border-strong); background: rgba(255, 255, 255, 0.07); }
+.pdm-open .pdm-trigger { border-color: rgba(255, 255, 255, 0.45); background: rgba(255, 255, 255, 0.08); }
+
+.pdm-trigger-icon { display: inline-flex; color: var(--fg-2); flex: 0 0 auto; }
+.pdm-trigger-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+.pdm-trigger-caret { display: inline-flex; color: var(--fg-3); flex: 0 0 auto; opacity: 0.7; transition: transform .15s ease; }
+.pdm-open .pdm-trigger-caret { transform: rotate(180deg); }
+
+/* ----- dropdown panel ----- */
+.pdm-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 280px;
+  max-width: min(420px, 90vw);
+  max-height: min(440px, 70vh);
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+  border-radius: var(--r-md);
+  padding: 6px;
+  animation: pdmIn .14s ease;
+  overflow: hidden;
+}
+@keyframes pdmIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+.pdm-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--glass-border);
+  flex: 0 0 auto;
+}
+.pdm-menu-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.pdm-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg-0);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.pdm-add-btn:hover { background: rgba(255, 255, 255, 0.14); border-color: var(--glass-border-strong); }
+
+.pdm-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pdm-empty {
+  padding: 14px 10px;
+  text-align: center;
+}
+.pdm-empty p { margin: 0 0 10px; font-size: 12px; color: var(--fg-3); }
+.pdm-empty-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg-0);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pdm-empty-add:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* ----- project row ----- */
+.pdm-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--r-sm);
+  position: relative;
+  transition: background .12s ease;
+}
+.pdm-item:hover { background: rgba(255, 255, 255, 0.06); }
+.pdm-item-active { background: rgba(255, 255, 255, 0.10); }
+.pdm-item:hover.pdm-item-active { background: rgba(255, 255, 255, 0.13); }
+.pdm-item-menu-open { background: rgba(255, 255, 255, 0.12); }
+
+.pdm-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 8px 9px 10px;
+  background: transparent;
+  border: none;
+  color: var(--fg-1);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.pdm-item-active .pdm-item-main { color: var(--fg-0); font-weight: 600; }
+.pdm-item-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pdm-item-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--fg-3);
+  margin-left: auto;
+  padding-right: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  max-width: 40%;
+}
+.pdm-item-badge {
+  display: inline-flex;
+  align-items: center;
+  color: #fff;
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+/* ----- 3-dot actions + submenu ----- */
+.pdm-item-actions { flex: 0 0 auto; display: inline-flex; align-items: center; position: relative; }
+.pdm-dots {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-3);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.pdm-dots:hover { background: rgba(255, 255, 255, 0.10); color: var(--fg-0); }
+.pdm-item-menu-open .pdm-dots { background: rgba(255, 255, 255, 0.14); color: var(--fg-0); }
+
+.pdm-submenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 70;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  min-width: 150px;
+  border-radius: var(--r-md);
+  animation: pdmIn .12s ease;
+  box-shadow: var(--glass-shadow);
+}
+.pdm-sub-head {
+  padding: 6px 8px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--glass-border);
+  margin-bottom: 4px;
+}
+.pdm-sub-item {
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  color: var(--fg-1);
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.pdm-sub-item:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg-0); }
+.pdm-sub-danger { color: var(--danger); }
+.pdm-sub-danger:hover { background: rgba(255, 122, 122, 0.12); color: var(--danger); }
+
+/* ----- inline rename ----- */
+.pdm-rename-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+}
+.pdm-rename-row input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--fg-0);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.pdm-rename-ok,
+.pdm-rename-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg-0);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.pdm-rename-ok { background: rgba(120, 200, 120, 0.15); border-color: rgba(120, 200, 120, 0.45); }
+.pdm-rename-ok:disabled { opacity: 0.4; cursor: default; }
+.pdm-rename-cancel:hover { background: rgba(255, 122, 122, 0.15); }
+
+@media (max-width: 768px) {
+  .pdm-menu { max-width: calc(100vw - 32px); }
+  .pdm-item-path { display: none; }
+}

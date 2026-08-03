@@ -9,6 +9,8 @@ import type {
   ChatResponse,
   Project,
   Chat,
+  AgentEvent,
+  AgentRunRequest,
 } from "../types";
 
 const BASE = "/api";
@@ -196,9 +198,55 @@ export const api = {
           if (!payload) continue;
           let ev: any;
           try { ev = JSON.parse(payload); } catch { continue; }
-          if (ev.error) throw new Error(ev.error);
-          if (ev.done) return;
-          if (typeof ev.delta === "string" && ev.delta.length) onDelta(ev.delta);
+      if (ev.error) throw new Error(ev.error);
+      if (ev.done) return;
+      if (typeof ev.delta === "string" && ev.delta.length) onDelta(ev.delta);
+    }
+    },
+  },
+
+  agent: {
+    // Streams an agentic run via Server-Sent Events. onEvent is invoked
+    // for every event (thinking / assistant_delta / tool_request /
+    // tool_result / done / error). Throws if an error event arrives or the
+    // connection fails. Resolves on the `done` event.
+    stream: async (
+      runReq: AgentRunRequest,
+      onEvent: (ev: AgentEvent) => void,
+      opts?: { signal?: AbortSignal },
+    ): Promise<void> => {
+      const res = await fetch(`${BASE}/agent/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify(runReq),
+        signal: opts?.signal,
+      });
+      if (!res.ok || !res.body) {
+        const text = await res.text();
+        let msg = `HTTP ${res.status}`;
+        try { msg = (JSON.parse(text)?.error) ?? msg; } catch { /* keep */ }
+        throw new Error(msg);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          let ev: AgentEvent;
+          try { ev = JSON.parse(payload) as AgentEvent; } catch { continue; }
+          if (ev.tag === "error" && ev.error) throw new Error(ev.error);
+          onEvent(ev);
+          if (ev.tag === "done") return;
         }
       }
     },

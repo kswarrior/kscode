@@ -1,33 +1,44 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useSettings } from "../../hooks/useSettings";
-import type { ChatRequest, Provider } from "../../types";
-import { IconChevronDown, IconSend, IconStop } from "../Icon";
+import type { AgentEvent, AgentRunRequest, Provider } from "../../types";
+import {
+  IconChevronDown,
+  IconSearch,
+  IconSend,
+  IconSpinner,
+  IconStop,
+  IconTool,
+} from "../Icon";
+import { renderMarkdown } from "./markdown";
 import "./ChatPanel.css";
+
+interface ToolEntry {
+  id: string;
+  name: string;
+  args: any;
+  result?: { ok: boolean; output: string };
+}
 
 interface Msg {
   role: "user" | "assistant" | "system";
   content: string;
   streaming?: boolean;
+  thinking?: boolean;
+  tools?: ToolEntry[];
 }
-
-const KNOWN_MODELS: Record<string, string[]> = {
-  gemini: ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
-  nvidia: [
-    "meta/llama-3.1-70b-instruct",
-    "meta/llama-3.3-70b-instruct",
-    "mistralai/mixtral-8x7b-instruct-v0.1",
-    "deepseek-ai/deepseek-r1",
-  ],
-  openai: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
-  anthropic: ["claude-3-5-sonnet-v2", "claude-3-5-haiku-v2"],
-};
 
 const SEP = "|";
 
 interface ChatPanelProps {
   project?: { id: string; name: string; path: string };
-  chat?: { id: string; title: string; messages?: Msg[]; provider?: string; model?: string };
+  chat?: {
+    id: string;
+    title: string;
+    messages?: Msg[];
+    provider?: string;
+    model?: string;
+  };
 }
 
 export function ChatPanel({ project, chat }: ChatPanelProps) {
@@ -41,8 +52,8 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
   const [modelKey, setModelKey] = useState<string>("");
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Load chat history when chat changes (or reset when none).
   useEffect(() => {
     stop();
     setError(null);
@@ -51,17 +62,23 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
     } else {
       setMessages([]);
     }
-    // Restore last-used provider/model for this chat if known.
     if (chat?.provider) setProviderId(chat.provider);
-    if (chat?.model) setModelKey(chat.provider ? chat.provider + SEP + chat.model : "");
+    if (chat?.model)
+      setModelKey(chat.provider ? chat.provider + SEP + chat.model : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat?.id]);
 
-  // Keep messages scrolled to the bottom as they grow.
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [input]);
 
   const provider = useMemo(
     () => providers.find((p) => p.id === providerId) ?? providers[0],
@@ -85,10 +102,9 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
     if (!effProviderId && providers.length) setProviderId(providers[0].id);
   }, [effProviderId, providers]);
 
-  const allProviders: Provider[] = providers.filter(p => p.enabled);
-  function modelsFor(p: Provider): string[] {
-    return p.models ?? [];
-  }
+  const allProviders: Provider[] = providers.filter((p) => p.enabled);
+
+  const modelsFor = (p: Provider): string[] => p.models ?? [];
 
   const triggerLabel = useMemo(() => {
     if (!parsed.p) return "No provider";
@@ -102,6 +118,42 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
     abortRef.current = null;
   };
 
+  // Mutate the last assistant message in state with a patch.
+  const patchLastAssistant = (patch: Partial<Msg>) => {
+    setMessages((cur) => {
+      const copy = [...cur];
+      const last = copy[copy.length - 1];
+      if (last && last.role === "assistant") {
+        copy[copy.length - 1] = { ...last, ...patch };
+      }
+      return copy;
+    });
+  };
+
+  const appendTool = (t: ToolEntry) => {
+    setMessages((cur) => {
+      const copy = [...cur];
+      const last = copy[copy.length - 1];
+      if (last && last.role === "assistant") {
+        const tools = [...(last.tools ?? []), t];
+        copy[copy.length - 1] = { ...last, tools, thinking: false };
+      }
+      return copy;
+    });
+  };
+
+  const updateToolResult = (id: string, result: { ok: boolean; output: string }) => {
+    setMessages((cur) => {
+      const copy = [...cur];
+      const last = copy[copy.length - 1];
+      if (last && last.role === "assistant" && last.tools) {
+        const tools = last.tools.map((t) => (t.id === id ? { ...t, result } : t));
+        copy[copy.length - 1] = { ...last, tools };
+      }
+      return copy;
+    });
+  };
+
   const send = async () => {
     if (!input.trim() || busy) return;
     const pId = effProviderId;
@@ -111,29 +163,37 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
     }
     const userText = input.trim();
     const userMsg: Msg = { role: "user", content: userText };
-    const baseMessages: Msg[] = [];
-    if (project?.path) {
-      baseMessages.push({
-        role: "system",
-        content: `You are assisting inside the project "${project.name}" located at ${project.path}. Use this path to reason about file locations when relevant.`,
-      });
-    }
-    const sentMessages = [...baseMessages, ...messages, userMsg];
-    setMessages([...messages, userMsg, { role: "assistant", content: "", streaming: true }]);
+    setMessages((cur) => [
+      ...cur,
+      userMsg,
+      { role: "assistant", content: "", thinking: true, streaming: true, tools: [] },
+    ]);
     setInput("");
     setError(null);
     setBusy(true);
     const ac = new AbortController();
     abortRef.current = ac;
-    const req: ChatRequest = {
+
+    // Build the conversation sent to the agent. Tool cards live in the UI
+    // only; the model already saw tool results as user messages server-side.
+    const priorMessages = messages.map((m) => ({ role: m.role, content: m.content }));
+    const agentMessages = [
+      ...(project?.path
+        ? [{
+            role: "system",
+            content: `Project: "${project.name}" at ${project.path}. Use this path to reason about file locations.`,
+          }]
+        : []),
+      ...priorMessages,
+      { role: "user", content: userText },
+    ];
+
+    const req: AgentRunRequest = {
       provider: pId,
       model: effModel || (parsed.p?.models?.[0] ?? ""),
-      messages: sentMessages
-        .filter((m) => m.role !== "system" || baseMessages.includes(m))
-        .map((m) => ({ role: m.role, content: m.content })),
+      messages: agentMessages,
     };
 
-    // Persist the user turn if a chat is bound to this panel.
     if (chat) {
       try {
         await api.chats.append(project!.id, chat.id, "user", userText);
@@ -144,94 +204,91 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
 
     let assistantText = "";
     try {
-      try {
-        // Try streaming first
-        await api.llm.stream(req, (chunk) => {
-          assistantText += chunk;
-          setMessages((cur) => {
-            const copy = [...cur];
-            const last = copy[copy.length - 1];
-            if (last && last.role === "assistant") {
-              copy[copy.length - 1] = { ...last, content: last.content + chunk };
-            }
-            return copy;
-          });
-        }, { signal: ac.signal });
-      } catch (streamErr: any) {
-        // Fallback to non-streaming if streaming fails (e.g., "streaming not supported")
-        const msg = streamErr?.message ?? String(streamErr);
-        if (!ac.signal.aborted && msg.toLowerCase().includes("streaming not supported")) {
-          try {
-            const resp = await api.llm.chat(req);
-            assistantText = resp.content;
+      await api.agent.stream(req, (ev: AgentEvent) => {
+        switch (ev.tag) {
+          case "thinking":
+            patchLastAssistant({ thinking: true, streaming: true });
+            break;
+          case "assistant_delta":
+            if (!ev.delta) break;
+            assistantText += ev.delta;
             setMessages((cur) => {
               const copy = [...cur];
               const last = copy[copy.length - 1];
-              if (last && last.role === "assistant" && last.streaming) {
-                copy[copy.length - 1] = { ...last, streaming: false, content: assistantText || "(empty response)" };
+              if (last && last.role === "assistant") {
+                copy[copy.length - 1] = {
+                  ...last,
+                  thinking: false,
+                  content: last.content + ev.delta!,
+                };
               }
               return copy;
             });
-          } catch (e: any) {
-            throw e;
-          }
-        } else {
-          throw streamErr;
+            break;
+          case "tool_request":
+            if (ev.tool) appendTool({ id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
+            break;
+          case "tool_result":
+            if (ev.result) updateToolResult(ev.result.id, { ok: ev.result.ok, output: ev.result.output });
+            // New round: reset streaming text and show thinking again.
+            assistantText = "";
+            setMessages((cur) => {
+              const copy = [...cur];
+              const last = copy[copy.length - 1];
+              if (last && last.role === "assistant") {
+                copy[copy.length - 1] = { ...last, thinking: true, content: "" };
+              }
+              return copy;
+            });
+            break;
+          case "done":
+            patchLastAssistant({ thinking: false, streaming: false });
+            break;
+          case "error":
+            if (ev.error) throw new Error(ev.error);
+            break;
         }
-      }
-
-      const finalText = assistantText || "(empty response)";
+      }, { signal: ac.signal });
+    } catch (e: any) {
+      const aborted = ac.signal.aborted;
+      const msg = aborted ? "Stopped." : (e?.message ?? String(e));
+      setError(aborted ? null : msg);
       setMessages((cur) => {
         const copy = [...cur];
         const last = copy[copy.length - 1];
         if (last && last.role === "assistant") {
-          copy[copy.length - 1] = { ...last, streaming: false, content: finalText };
+          copy[copy.length - 1] = {
+            ...last,
+            streaming: false,
+            thinking: false,
+            content: aborted
+              ? last.content + "\n\n_(stopped)_"
+              : (last.content ? last.content + "\n\n" : "") + `Error: ${msg}`,
+          };
         }
         return copy;
       });
-      if (chat && finalText) {
-        try {
-          await api.chats.append(project!.id, chat.id, "assistant", finalText);
-        } catch {
-          /* ignore */
+    } finally {
+      // Finalize the assistant turn and (best-effort) persist its text.
+      let finalAssistant = "";
+      setMessages((cur) => {
+        const copy = [...cur];
+        const last = copy[copy.length - 1];
+        if (last && last.role === "assistant") {
+          finalAssistant = last.content || "(empty response)";
+          copy[copy.length - 1] = { ...last, content: finalAssistant, thinking: false, streaming: false };
         }
-        try {
-          await api.chats.meta(project!.id, chat.id, pId, effModel);
-        } catch {
-          /* ignore */
-        }
-      }
-    } catch (e: any) {
-    const aborted = ac.signal.aborted;
-    const msg = aborted ? "Stopped." : (e?.message ?? String(e));
-    setError(aborted ? null : msg);
-    setMessages((cur) => {
-      const copy = [...cur];
-      const last = copy[copy.length - 1];
-      if (last && last.role === "assistant" && last.streaming) {
-        copy[copy.length - 1] = {
-          ...last,
-          streaming: false,
-          content: aborted
-            ? last.content + "\n\n_(stopped)_"
-            : `Error: ${msg}`,
-        };
-      }
-      return copy;
-    });
-    // Persist partial assistant turn even on error/abort.
-    if (chat && assistantText) {
-      try {
-        await api.chats.append(project!.id, chat.id, "assistant", assistantText);
-      } catch {
-        /* ignore */
+        return copy;
+      });
+      setBusy(false);
+      abortRef.current = null;
+
+      if (chat && finalAssistant) {
+        try { await api.chats.append(project!.id, chat.id, "assistant", finalAssistant); } catch { /* ignore */ }
+        try { await api.chats.meta(project!.id, chat.id, pId, effModel); } catch { /* ignore */ }
       }
     }
-  } finally {
-    setBusy(false);
-    abortRef.current = null;
-  }
-};
+  };
 
   return (
     <div className="chat-panel">
@@ -243,11 +300,27 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
         )}
         {messages.map((m, i) => (
           <div key={i} className={"chat-msg chat-msg-" + m.role}>
-            <div className="chat-msg-role">{m.role}</div>
-            <div className="chat-msg-body">
-              {m.content}
-              {m.streaming && <span className="chat-cursor">▋</span>}
-            </div>
+            {m.thinking && (
+              <div className="thinking-pill" aria-live="polite">
+                <IconSpinner size={13} className="icon-spin" />
+                <span>thinking…</span>
+              </div>
+            )}
+            {m.tools && m.tools.length > 0 && (
+              <div className="tool-cards">
+                {m.tools.map((t) => (
+                  <ToolCard key={t.id} tool={t} />
+                ))}
+              </div>
+            )}
+            <div
+              className="chat-msg-body md-body"
+              dangerouslySetInnerHTML={{
+                __html:
+                  renderMarkdown(m.content) +
+                  (m.streaming && !m.thinking ? '<span class="chat-cursor">\u258B</span>' : ""),
+              }}
+            />
           </div>
         ))}
       </div>
@@ -255,9 +328,10 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       <div className="chat-input-wrap">
         <div className="chat-input">
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Send a message…   (⌘/Ctrl+Enter)"
+            placeholder="Send a message… (⌘/Ctrl+Enter)"
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -299,8 +373,8 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
 }
 
 /* ------------------------------------------------------------------ *
- * ModelPicker — transparent, minimal-height grouped dropdown listing
- * each provider as a header followed by its models.
+ * ModelPicker — grouped dropdown with search input and right-side
+ * anchoring so it never clips off the phone screen.
  * ------------------------------------------------------------------ */
 function ModelPicker({
   providers,
@@ -318,10 +392,12 @@ function ModelPicker({
   onPick: (providerId: string, model: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setQuery("");
     const onDoc = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
@@ -336,10 +412,10 @@ function ModelPicker({
     };
   }, [open]);
 
-  void SEP;
+  const q = query.trim().toLowerCase();
 
   return (
-    <div className={"mp" + (open ? " mp-open" : "")} ref={wrapRef}>
+    <div className={open ? "mp mp-open" : "mp"} ref={wrapRef}>
       <button
         type="button"
         className="mp-trigger"
@@ -351,28 +427,46 @@ function ModelPicker({
         <IconChevronDown size={13} />
       </button>
       {open && (
-        <ul className="mp-menu glass-strong" role="listbox">
-          {providers.length === 0 && (
-            <li className="mp-empty">No providers configured.</li>
-          )}
+        <ul className="mp-menu glass-strong mp-menu-right" role="listbox">
+          <li className="mp-search-row">
+            <IconSearch size={13} className="mp-search-icon" />
+            <input
+              type="text"
+              className="mp-search"
+              placeholder="Search models..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              autoFocus
+            />
+          </li>
           {providers.map((p) => {
             const models = modelsFor(p);
+            const visibleModels = q
+              ? models.filter((m) => m.toLowerCase().includes(q))
+              : models;
+            const provMatch = !q || p.name?.toLowerCase().includes(q) || p.id.toLowerCase().includes(q);
+            if (!provMatch && visibleModels.length === 0) return null;
             const provDefaultSelected = p.id === selectedProviderId && selectedModel === "";
+
+            if (q && visibleModels.length === 0 && !provMatch) return null;
+
             return (
               <li key={p.id} className="mp-group">
-                <div
-                  className={"mp-group-head" + (provDefaultSelected ? " mp-sel" : "")}
-                  onClick={() => {
-                    onPick(p.id, "");
-                    setOpen(false);
-                  }}
-                  role="option"
-                  aria-selected={provDefaultSelected}
-                >
-                  <span className="mp-group-name">{p.name || p.id}</span>
-                  <span className="mp-group-default">default</span>
-                </div>
-                {models.length > 0 && (
+                {provMatch && (
+                  <div
+                    className={"mp-group-head" + (provDefaultSelected ? " mp-sel" : "")}
+                    onClick={() => {
+                      onPick(p.id, "");
+                      setOpen(false);
+                    }}
+                    role="option"
+                    aria-selected={provDefaultSelected}
+                  >
+                    <span className="mp-group-name">{p.name || p.id}</span>
+                    {!q && <span className="mp-group-default">default</span>}
+                  </div>
+                )}
+                {!q && visibleModels.length > 0 && (
                   <ul className="mp-models">
                     {models.map((m) => {
                       const sel = p.id === selectedProviderId && m === selectedModel;
@@ -398,6 +492,29 @@ function ModelPicker({
                     })}
                   </ul>
                 )}
+                {q &&
+                  visibleModels.map((m) => {
+                    const sel = p.id === selectedProviderId && m === selectedModel;
+                    return (
+                      <div
+                        key={m}
+                        className={"mp-model" + (sel ? " mp-sel" : "")}
+                        onClick={() => {
+                          onPick(p.id, m);
+                          setOpen(false);
+                        }}
+                        role="option"
+                        aria-selected={sel}
+                      >
+                        {m}
+                        {sel && (
+                          <span className="mp-check" aria-hidden="true">
+                            ✓
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
               </li>
             );
           })}

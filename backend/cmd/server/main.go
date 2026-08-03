@@ -137,8 +137,9 @@ func main() {
 	)
 	projectsHandler := api.NewProjectsHandler(projectsStore, chatsStore)
 	chatsHandler := api.NewChatsHandler(chatsStore)
+	agentHandler := api.NewAgentHandler(llmClient, rootFn)
 
-	server := api.New(filesHandler, shellHandler, settingsHandler, llmHandler, workspaceHandler, projectsHandler, chatsHandler)
+	server := api.New(filesHandler, shellHandler, settingsHandler, llmHandler, workspaceHandler, projectsHandler, chatsHandler, agentHandler)
 
 	allowed := map[string]bool{}
 	for _, o := range current.AllowedOrigins {

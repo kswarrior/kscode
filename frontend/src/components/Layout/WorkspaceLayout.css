@@ -36,26 +36,14 @@
 
 .hamburger { display: none; }
 
-.brand { gap: 10px; }
+.brand { gap: 10px; min-width: 0; }
 .brand-text {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.4px;
   color: var(--fg-0);
   user-select: none;
-}
-.brand-project {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-2);
-  padding: 2px 9px;
-  margin-left: 4px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--r-pill);
-  max-width: 180px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .header-nav {

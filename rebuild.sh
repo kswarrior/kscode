@@ -23,6 +23,7 @@ BACKEND_DIR="$ROOT/backend"
 FRONTEND_DIR="$ROOT/frontend"
 RELEASE_DIR="$ROOT/release"
 EMBED_DIR="$ROOT/backend/internal/web/dist"
+FE_TMP="/tmp/ks_fe_build"
 
 GO_BUILD_FLAGS=(-buildvcs=false)
 
@@ -55,32 +56,30 @@ echo "        npm $(npm --version)"
 
 # ---------------------------------------------------------------
 # 3. Build the frontend bundle into the embed directory.
+#    Uses a writable tmp location so that npm install and native
+#    binary execution work even on read-only fuse mounts.
 # ---------------------------------------------------------------
 echo "[3/6] Building frontend..."
-(
-  cd "$FRONTEND_DIR"
+rm -rf "$FE_TMP"
+mkdir -p "$FE_TMP"
 
-  # Install deps on first build or if node_modules is missing.
-  if [[ ! -d node_modules ]]; then
-    echo "        installing npm dependencies (first build)..."
-    npm install
-  else
-    echo "        node_modules present, skipping npm install"
-  fi
+cp "$FRONTEND_DIR"/package.json "$FE_TMP/"
+cp "$FRONTEND_DIR"/package-lock.json "$FE_TMP/" 2>/dev/null || true
+cp "$FRONTEND_DIR"/tsconfig.json "$FE_TMP/"
+cp "$FRONTEND_DIR"/tsconfig.node.json "$FE_TMP/" 2>/dev/null || true
+cp "$FRONTEND_DIR"/vite.config.ts "$FE_TMP/"
+cp "$FRONTEND_DIR"/index.html "$FE_TMP/"
 
-  # esbuild ships a native binary that npm sometimes installs without the
-  # executable bit; make sure it is runnable so Vite does not choke.
-  if [[ -f node_modules/@esbuild/linux-x64/bin/esbuild ]]; then
-    chmod +x node_modules/@esbuild/linux-x64/bin/esbuild 2>/dev/null || true
-  fi
+echo "        installing dependencies in $FE_TMP ..."
+(cd "$FE_TMP" && npm install --no-audit --no-fund 2>&1 | tail -1)
 
-  # Type-check, then bundle. Invoke the bins directly via node so this works
-  # even in environments where npm does not create node_modules/.bin symlinks.
-  node node_modules/typescript/bin/tsc --noEmit
-  rm -rf dist
-  node node_modules/vite/bin/vite.js build
-)
-echo "        -> $FRONTEND_DIR/dist"
+cp -r "$FRONTEND_DIR"/src "$FE_TMP/src"
+
+echo "        type-checking..."
+(cd "$FE_TMP" && node node_modules/typescript/bin/tsc --noEmit --project . )
+echo "        bundling..."
+(cd "$FE_TMP" && node node_modules/vite/bin/vite.js build)
+echo "        -> $FE_TMP/dist"
 
 # ---------------------------------------------------------------
 # 4. Place the built bundle where go:embed expects it.
@@ -88,7 +87,10 @@ echo "        -> $FRONTEND_DIR/dist"
 echo "[4/6] Staging frontend for embed..."
 rm -rf "$EMBED_DIR"
 mkdir -p "$(dirname "$EMBED_DIR")"
-mv "$FRONTEND_DIR/dist" "$EMBED_DIR"
+mv "$FE_TMP/dist" "$EMBED_DIR"
+
+# Cleanup temp build dir.
+rm -rf "$FE_TMP"
 
 # embed.FS requires at least one file; sanity-check it landed.
 if ! ls "$EMBED_DIR"/index.html >/dev/null 2>&1; then
@@ -122,6 +124,3 @@ echo " KS Code build complete"
 echo ""
 echo " Run it:"
 echo "   cd \"$RELEASE_DIR\""
-echo "   ./kscode                 # http://localhost:6060"
-echo "   ./kscode --port 3837     # http://localhost:3837"
-echo "=============================================="

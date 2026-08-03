@@ -9,7 +9,6 @@ import {
   IconFolder,
   IconFolderOpen,
   IconPlus,
-  IconRefresh,
   IconTrash,
 } from "../Icon";
 import "./FileTree.css";
@@ -173,9 +172,6 @@ export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Pro
     <div className="filetree">
       <div className="ft-header">
         <span className="ft-title">EXPLORER</span>
-        <button className="ft-refresh" title="Refresh" onClick={() => onRefresh()}>
-          <IconRefresh size={15} />
-        </button>
       </div>
       <div className="ft-root-label" title={root}>{root || "workspace"}</div>
       <ul className="ft-list">
