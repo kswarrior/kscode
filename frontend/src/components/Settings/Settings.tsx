@@ -26,6 +26,7 @@ export function SettingsPanel() {
   });
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const connectDropdownRef = useRef<HTMLDivElement>(null);
+  const [tab, setTab] = useState<"general" | "providers">("general");
 
   // Sub-page editor for adding/editing providers. When open, the form is shown
   // instead of the provider list.
@@ -175,15 +176,40 @@ export function SettingsPanel() {
   return (
     <div className="settings-page">
       <header className="sp-header">
-        <span className="sp-title row"><IconSettings /> Settings</span>
+        <div className="sp-header-left">
+          <span className="sp-title row"><IconSettings /> Settings</span>
+          <nav className="sp-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "general"}
+              className={`sp-tab${tab === "general" ? " active" : ""}`}
+              onClick={() => setTab("general")}
+            >
+              General
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "providers"}
+              className={`sp-tab${tab === "providers" ? " active" : ""}`}
+              onClick={() => setTab("providers")}
+            >
+              Providers
+            </button>
+          </nav>
+        </div>
       </header>
 
       {error && <div className="sp-error">{error}</div>}
 
       <div className="sp-scroll">
+        {tab === "general" ? (
+          <p className="sp-empty">No general settings yet.</p>
+        ) : (
         <section className="sp-section ai-providers-section">
           <div className="sp-card-header">
-            <h3 className="row"><IconChat size={14} /> AI Providers</h3>
+            <h3 className="row"><IconChat size={14} /> Providers</h3>
             <div className="connect-dropdown" ref={connectDropdownRef}>
               <button className="btn btn-primary" onClick={() => setShowConnectDropdown(!showConnectDropdown)}>
                 <IconPlus size={14} /> Connect
@@ -237,7 +263,7 @@ export function SettingsPanel() {
             </div>
           )}
         </section>
-
+        )}
       </div>
     </div>
   );

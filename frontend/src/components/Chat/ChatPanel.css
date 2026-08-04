@@ -360,3 +360,162 @@
 .md-body strong { color: var(--fg-0); font-weight: 700; }
 .md-body em { font-style: italic; }
 .md-body del { color: var(--fg-3); }
+
+/* ------------------------------------------------------------------ *
+ * "thinking…" animated pill — shown at the start of each agent round
+ * before the model emits any content.
+ * ------------------------------------------------------------------ */
+.thinking-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 2px 0 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  animation: thinkPulse 1.6s ease-in-out infinite;
+}
+.thinking-pill .icon-spin { color: var(--fg-1); }
+@keyframes thinkPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+.icon-spin {
+  animation: iconSpin 0.9s linear infinite;
+}
+@keyframes iconSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Retrying pill — shown while the agent waits before retrying a
+   transient upstream error (429, 5xx). Pulses with the same timing as
+   thinking but orange-tinted to signal "transient failure, waiting". */
+.retrying-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 2px 0 6px;
+  background: rgba(240, 150, 50, 0.15);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-pill);
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  animation: thinkPulse 1.6s ease-in-out infinite;
+}
+.retrying-pill .icon-spin { color: var(--warn); }
+
+/* ------------------------------------------------------------------ *
+ * Tool cards — collapsible invocation cards rendered inline in the
+ * assistant turn.
+ * ------------------------------------------------------------------ */
+.tool-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
+.tool-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--r-sm);
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  transition: border-color .12s ease;
+}
+.tool-card-ok { border-left: 3px solid rgba(255, 255, 255, 0.18); }
+.tool-card-err { border-left: 3px solid rgba(255, 255, 255, 0.12); }
+.tool-card-pending { border-left: 3px solid rgba(255, 255, 255, 0.08); }
+
+.tc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  color: var(--fg-1);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.tc-head:hover { background: rgba(255, 255, 255, 0.06); }
+.tc-icon {
+  display: inline-flex;
+  color: var(--fg-2);
+  flex: 0 0 auto;
+}
+.tool-card-ok .tc-icon { color: var(--fg-1); }
+.tool-card-err .tc-icon { color: var(--fg-2); }
+.tc-name {
+  font-weight: 600;
+  color: var(--fg-0);
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+.tc-arg {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tc-status {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tool-card-ok .tc-status { color: var(--fg-2); }
+.tool-card-err .tc-status { color: var(--fg-3); }
+.tc-spin { display: inline-flex; color: var(--fg-2); }
+.tc-chev { flex: 0 0 auto; color: var(--fg-3); font-size: 10px; }
+
+.tc-body {
+  border-top: 1px solid var(--glass-border);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tc-section { display: flex; flex-direction: column; gap: 4px; }
+.tc-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.tc-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--fg-1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.tc-pre-err { color: var(--danger); }

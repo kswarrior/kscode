@@ -198,27 +198,48 @@ export const api = {
           if (!payload) continue;
           let ev: any;
           try { ev = JSON.parse(payload); } catch { continue; }
-      if (ev.error) throw new Error(ev.error);
-      if (ev.done) return;
-      if (typeof ev.delta === "string" && ev.delta.length) onDelta(ev.delta);
-    }
+          if (ev.error) throw new Error(ev.error);
+          if (ev.done) return;
+          if (typeof ev.delta === "string" && ev.delta.length) onDelta(ev.delta);
+        }
+      }
     },
   },
 
   agent: {
-    // Streams an agentic run via Server-Sent Events. onEvent is invoked
-    // for every event (thinking / assistant_delta / tool_request /
-    // tool_result / done / error). Throws if an error event arrives or the
-    // connection fails. Resolves on the `done` event.
-    stream: async (
-      runReq: AgentRunRequest,
-      onEvent: (ev: AgentEvent) => void,
-      opts?: { signal?: AbortSignal },
-    ): Promise<void> => {
+    // Start a background agent run. Returns a taskId that can be used
+    // to stream events via streamEvents() and stop via stop().
+    run: async (runReq: AgentRunRequest): Promise<string> => {
       const res = await fetch(`${BASE}/agent/run`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(runReq),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let msg = `HTTP ${res.status}`;
+        try { msg = (JSON.parse(text)?.error) ?? msg; } catch { /* keep */ }
+        throw new Error(msg);
+      }
+      const data = await res.json() as { taskId: string };
+      return data.taskId;
+    },
+
+    // Stream events for a background task. If lastEventIdx is provided,
+    // the server will replay events from that index (for reconnection).
+    // Resolves when the task completes, stops, or errors.
+    streamEvents: async (
+      taskId: string,
+      onEvent: (ev: AgentEvent) => void,
+      opts?: { signal?: AbortSignal; lastEventIdx?: number },
+    ): Promise<void> => {
+      const url = new URL(`${BASE}/agent/stream`);
+      url.searchParams.set("taskId", taskId);
+      if (opts?.lastEventIdx !== undefined) {
+        url.searchParams.set("lastEvent", String(opts.lastEventIdx));
+      }
+      const res = await fetch(url.toString(), {
+        headers: { Accept: "text/event-stream" },
         signal: opts?.signal,
       });
       if (!res.ok || !res.body) {
@@ -246,8 +267,21 @@ export const api = {
           try { ev = JSON.parse(payload) as AgentEvent; } catch { continue; }
           if (ev.tag === "error" && ev.error) throw new Error(ev.error);
           onEvent(ev);
-          if (ev.tag === "done") return;
+          if (ev.tag === "done" || ev.tag === "error") return;
         }
+      }
+    },
+
+    // Stop a background task.
+    stop: async (taskId: string): Promise<void> => {
+      const res = await fetch(`${BASE}/agent/stop?taskId=${encodeURIComponent(taskId)}`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let msg = `HTTP ${res.status}`;
+        try { msg = (JSON.parse(text)?.error) ?? msg; } catch { /* keep */ }
+        throw new Error(msg);
       }
     },
   },

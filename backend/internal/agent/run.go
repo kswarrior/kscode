@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"kscode/internal/llm"
 	"kscode/internal/tools"
@@ -30,20 +31,27 @@ const (
 	EventAssistantDelta EventTag = "assistant_delta" // streamed text chunk
 	EventToolRequest    EventTag = "tool_request"    // a parsed tool call
 	EventToolResult     EventTag = "tool_result"     // the tool's result
+	EventRetry          EventTag = "retry"           // transient error; retrying after a delay
 	EventDone           EventTag = "done"            // run finished cleanly
 	EventError          EventTag = "error"           // failure
 )
 
-// Event is one streamed event. Default fields are used; only one of
-// Delta/ToolCall/Result/Error is set depending on Tag.
+// Event is one streamed event. Only fields relevant to Tag are populated.
 type Event struct {
 	Tag   EventTag       `json:"tag"`
 	Round int            `json:"round,omitempty"`
 	Delta string         `json:"delta,omitempty"`
-	Text  string         `json:"text,omitempty"` // full assistant text for the round (sent with tool_request/* for context)
+	Text  string         `json:"text,omitempty"` // full assistant text for the round
 	Tool  *ToolCall      `json:"tool,omitempty"`
 	Result *ToolResult   `json:"result,omitempty"`
 	Error string         `json:"error,omitempty"`
+
+	// Retry-specific fields for EventRetry:
+	// Attempt = which retry this is (1, 2, 3...)
+	// DelayMs = how long we'll wait before retrying (1000, 2000, 4000...)
+	// Last = the underlying error message that triggered the retry.
+	Attempt int    `json:"attempt,omitempty"`
+	DelayMs int    `json:"delayMs,omitempty"`
 }
 
 // ToolCall is a parsed tool invocation. ID is a short round-unique label
@@ -110,29 +118,16 @@ func Run(ctx context.Context, llmClient *llm.Client, cfg RunConfig, onEvent func
 			Messages: msgs,
 		}
 
-		streamErr := llmClient.StreamChat(ctx, req, func(d llm.Delta) {
+		streamErr := streamWithRetry(ctx, llmClient, req, round, func(d llm.Delta) {
 			if d.Delta != "" {
 				acc.WriteString(d.Delta)
 				safeEmit(onEvent, Event{Tag: EventAssistantDelta, Round: round, Delta: d.Delta})
 			}
-		})
+		}, onEvent)
 		if streamErr != nil {
-			// If the model errored mid-stream, surface it. If it's the
-			// "streaming not supported" case, fall back to a non-stream
-			// call for this round so providers that don't support SSE
-			// still work in agent mode.
-			if strings.Contains(strings.ToLower(streamErr.Error()), "streaming not supported") {
-				resp, err := llmClient.Chat(ctx, req)
-				if err != nil {
-					safeEmit(onEvent, Event{Tag: EventError, Error: err.Error(), Round: round})
-					return finalText.String(), err
-				}
-				acc.WriteString(resp.Content)
-				safeEmit(onEvent, Event{Tag: EventAssistantDelta, Round: round, Delta: resp.Content})
-			} else {
-				safeEmit(onEvent, Event{Tag: EventError, Error: streamErr.Error(), Round: round})
-				return finalText.String(), streamErr
-			}
+			// streamWithRetry already exhausted its retries (or hit a
+			// non-transient error) and emitted an EventError. Bail out.
+			return finalText.String(), streamErr
 		}
 
 		assistantText := acc.String()
@@ -190,6 +185,102 @@ func safeEmit(onEvent func(Event), ev Event) {
 	if onEvent != nil {
 		onEvent(ev)
 	}
+}
+
+// streamWithRetry calls StreamChat; on a TRANSIENT upstream error (429 Too
+// Many Requests, 5xx, etc.) it waits with exponential backoff and retries.
+// The delay sequence is 1s, 2s, 4s, 8s, 16s, 32s (doubling each attempt).
+// A non-transient error (missing key, auth 400/401/404, bad request) breaks
+// out immediately. If "streaming not supported" we fall back to a
+// non-streaming Chat call for this round.
+//
+// The retry sequence resets on every NEW user message (because each run()
+// starts fresh), so a permanent chat stop is followed by a brand new 1s, 2s,
+// 4s sequence on the next prompt — exactly the requested behavior.
+//
+// When a retry is scheduled we emit a `retry` event carrying the attempt
+// number and the delay, so the UI can show "retrying in Ns…".
+func streamWithRetry(
+	ctx context.Context,
+	client *llm.Client,
+	req llm.ChatRequest,
+	round int,
+	onDelta func(llm.Delta),
+	onEvent func(Event),
+) error {
+	const (
+		baseDelay    = 1 * time.Second
+		maxAttempts  = 7              // ~1+2+4+8+16+32+mkdir => covers ~1 min
+	)
+
+	for attempt := 0; ; attempt++ {
+		err := client.StreamChat(ctx, req, onDelta)
+		if err == nil {
+			return nil // success
+		}
+		msg := strings.ToLower(err.Error())
+
+		// "streaming not supported" is a permanent fallback signal, not a
+		// transient error — switch to non-streaming Chat once.
+		if strings.Contains(msg, "streaming not supported") {
+			resp, ferr := client.Chat(ctx, req)
+			if ferr != nil {
+				safeEmit(onEvent, Event{Tag: EventError, Error: ferr.Error(), Round: round})
+				return ferr
+			}
+			onDelta(llm.Delta{Delta: resp.Content})
+			return nil
+		}
+
+		// Non-transient errors (auth, bad model, missing key, 400/404) abort.
+		if !isTransientError(msg) {
+			safeEmit(onEvent, Event{Tag: EventError, Error: err.Error(), Round: round})
+			return err
+		}
+
+		// Transient: retry with exponential backoff, up to maxAttempts.
+		if attempt >= maxAttempts {
+			safeEmit(onEvent, Event{Tag: EventError, Error: fmt.Sprintf("giving up after %d retries: %s", maxAttempts, err.Error()), Round: round})
+			return err
+		}
+
+		delay := baseDelay << uint(attempt) // 1s, 2s, 4s, 8s, 16s, 32s, 64s(cap)
+		safeEmit(onEvent, Event{
+			Tag:     EventRetry,
+			Round:   round,
+			Attempt: attempt + 1,
+			DelayMs: int(delay / time.Millisecond),
+			Error:   err.Error(),
+		})
+
+		// Wait, but bail early if the context is cancelled (user pressed Stop).
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+}
+
+// isTransientError reports whether an LLM upstream error is worth retrying.
+// We retry on rate limits (429), server errors (5xx) and generic I/O noise
+// (EOF, connection reset, deadline). We DO NOT retry auth/validation
+// errors (400, 401, 403, 404) since they won't fix themselves.
+func isTransientError(msg string) bool {
+	// Allowlist of transient signal substrings (lowercased).
+	transient := []string{
+		"429", "too many requests", "rate limit", "rate-limit",
+		"500", "502", "503", "504",
+		"internal server error", "bad gateway", "service unavailable", "gateway timeout",
+		"upstream", "timeout", "deadline", "eof", "connection reset",
+		"broken pipe", "temporary", "try again", "retry",
+	}
+	for _, s := range transient {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // toolCallBlock matches a ```tool_call fenced block and captures the JSON.

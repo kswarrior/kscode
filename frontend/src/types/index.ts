@@ -124,6 +124,7 @@ export type AgentEventTag =
   | "assistant_delta"
   | "tool_request"
   | "tool_result"
+  | "retry"
   | "done"
   | "error";
 
@@ -135,6 +136,8 @@ export interface AgentEvent {
   tool?: AgentToolCall;
   result?: AgentToolResult;
   error?: string;
+  attempt?: number;
+  delayMs?: number;
 }
 
 export interface AgentRunRequest {

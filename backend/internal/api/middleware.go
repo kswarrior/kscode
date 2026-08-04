@@ -38,6 +38,16 @@ func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
 }
 
+// Pass Flusher through so SSE streaming endpoints ( /api/llm/stream,
+// /api/agent/run ) keep working under the Logger middleware. Without this
+// forwarding, the w.(http.Flusher) assertion in those handlers fails and
+// every streaming request returns "streaming not supported".
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Logger emits one structured log line per request.
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { useWorkspace } from "../../hooks/useWorkspace";
 import { useSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../hooks/useProjects";
+import { useChats } from "../../hooks/useChats";
 import type { Project } from "../../types";
 import { FileTree } from "../FileTree/FileTree";
 import { CodeEditor } from "../Editor/Editor";
 import { SettingsPanel } from "../Settings/Settings";
 import { ChatsPanel } from "../ChatsPanel/ChatsPanel";
+import { ChatsList } from "../ChatsPanel/ChatsList";
 import { ProjectDropdownMenu } from "../ChatsPanel/ProjectDropdownMenu";
 import { ProjectFormDialog } from "../ChatsPanel/ProjectFormDialog";
 import { SearchPanel } from "../Search/SearchPanel";
@@ -29,12 +31,12 @@ export function WorkspaceLayout() {
   const ws = useWorkspace();
   const { settings } = useSettings();
   const projects = useProjects();
+  const chats = useChats(projects.active);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("explorer");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mainPage, setMainPage] = useState<MainPage>("chat");
   const [isMobile, setIsMobile] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [editProject, setEditProject] = useState<Project | null>(null);
 
@@ -63,11 +65,11 @@ export function WorkspaceLayout() {
 
   // close mobile drawer on Escape
   useEffect(() => {
-    if (!mobileNavOpen) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setMobileNavOpen(false); };
+    if (!sidebarOpen || !isMobile) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setSidebarOpen(false); };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [mobileNavOpen]);
+  }, [sidebarOpen, isMobile]);
 
   // When the active project changes, the backend FS root moves with it, so
   // re-fetch the file tree and clear the open file.
@@ -94,10 +96,10 @@ export function WorkspaceLayout() {
     <div className={"app-shell" + (isMobile && sidebarOpen ? " has-drawer" : "")}>
       <header className="app-header glass-strong">
         <button
-          className="icon-btn hamburger visible-mobile"
-          onClick={() => setMobileNavOpen(true)}
-          aria-label="Open navigation"
-          title="Menu"
+          className="icon-btn hamburger"
+          onClick={() => setSidebarOpen((v) => !v)}
+          aria-label="Toggle sidebar"
+          title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
         >
           <IconMenu />
         </button>
@@ -150,72 +152,56 @@ export function WorkspaceLayout() {
         </nav>
       </header>
 
-      {/* mobile nav drawer */}
-      {isMobile && mobileNavOpen && (
-        <div className="mobile-nav-backdrop" onClick={() => setMobileNavOpen(false)}>
-          <aside className="mobile-nav glass-strong" onClick={(e) => e.stopPropagation()}>
-            <div className="mobile-nav-head">
-              <span className="gradient-text">Menu</span>
-              <button
-                className="icon-btn"
-                onClick={() => setMobileNavOpen(false)}
-                aria-label="Close"
-              >
-                <IconClose />
-              </button>
-            </div>
-            <button className="mobile-nav-item" onClick={() => { setMainPage("chat"); setMobileNavOpen(false); }}>
-              <IconChat /> <span>AI Chat</span>
-            </button>
-            <button className="mobile-nav-item" onClick={() => { setMainPage("editor"); setMobileNavOpen(false); }}>
-              <IconFiles /> <span>Editor</span>
-            </button>
-            <button className="mobile-nav-item" onClick={() => { setSidebarOpen((v) => !v); setMobileNavOpen(false); }}>
-              <IconSearch /> <span>{sidebarOpen ? "Hide" : "Show"} sidebar</span>
-            </button>
-            <button className="mobile-nav-item" onClick={() => { setMainPage("settings"); setMobileNavOpen(false); }}>
-              <IconSettings /> <span>Settings</span>
-           </button>
-          </aside>
-        </div>
-      )}
-
       <div className="app-body">
-        {sidebarOpen && (
+        {/* Sidebar content follows the open page: chat list on the Chat
+            page, file explorer on the Editor page, none on Settings. */}
+        {sidebarOpen && mainPage !== "settings" && (
           <aside className={"sidebar glass" + (isMobile ? " as-drawer" : "")}>
-            <div className="sidebar-tabs">
-              <button
-                className={sidebarTab === "explorer" ? "active" : ""}
-                onClick={() => setSidebarTab("explorer")}
-              >
-                <IconFiles /> <span>Files</span>
-              </button>
-              <button
-                className={sidebarTab === "search" ? "active" : ""}
-                onClick={() => setSidebarTab("search")}
-              >
-                <IconSearch /> <span>Search</span>
-              </button>
-              <button
-                className="sidebar-close icon-btn"
-                onClick={() => setSidebarOpen(false)}
-                aria-label="Close sidebar"
-                title="Close sidebar"
-              >
-                <IconClose size={14} />
-              </button>
-            </div>
-            {sidebarTab === "explorer" ? (
-              <FileTree
-                entry={ws.tree}
-                root={ws.root}
-                loading={ws.loading}
-                error={ws.error}
-                onOpen={handleOpen}
-                onRefresh={() => ws.refresh()}
+            {mainPage === "chat" ? (
+              <ChatsList
+                hasProjects={projects.projects.length > 0}
+                active={projects.active}
+                chatsApi={chats}
+                onClose={() => setSidebarOpen(false)}
+                onOpenChat={() => { if (isMobile) setSidebarOpen(false); }}
               />
             ) : (
-              <SearchPanel onOpen={handleSearchOpen} />
+              <>
+                <div className="sidebar-tabs">
+                  <button
+                    className={sidebarTab === "explorer" ? "active" : ""}
+                    onClick={() => setSidebarTab("explorer")}
+                  >
+                    <IconFiles /> <span>Files</span>
+                  </button>
+                  <button
+                    className={sidebarTab === "search" ? "active" : ""}
+                    onClick={() => setSidebarTab("search")}
+                  >
+                    <IconSearch /> <span>Search</span>
+                  </button>
+                  <button
+                    className="sidebar-close icon-btn"
+                    onClick={() => setSidebarOpen(false)}
+                    aria-label="Close sidebar"
+                    title="Close sidebar"
+                  >
+                    <IconClose size={14} />
+                  </button>
+                </div>
+                {sidebarTab === "explorer" ? (
+                  <FileTree
+                    entry={ws.tree}
+                    root={ws.root}
+                    loading={ws.loading}
+                    error={ws.error}
+                    onOpen={handleOpen}
+                    onRefresh={() => ws.refresh()}
+                  />
+                ) : (
+                  <SearchPanel onOpen={handleSearchOpen} />
+                )}
+              </>
             )}
           </aside>
         )}
@@ -224,7 +210,7 @@ export function WorkspaceLayout() {
           {/* All pages share the same header + sidebar; only main area swaps. */}
           {mainPage === "chat" && (
             <div className="page page-chat glass">
-              <ChatsPanel projectsApi={projects} />
+              <ChatsPanel project={projects.active} chatsApi={chats} />
             </div>
           )}
           {mainPage === "editor" && (

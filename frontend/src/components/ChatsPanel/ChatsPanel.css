@@ -1,27 +1,27 @@
 /* ============================================================
-   ChatsPanel — two-pane (chat list | conversation) layout
+   ChatsPanel — conversation-only main area
    ============================================================ */
 
 .chats-panel {
   height: 100%;
   width: 100%;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   border-radius: var(--r-md);
   overflow: hidden;
 }
 
-/* ----- left sidebar (chat list column) ----- */
+/* ----- chat list column (rendered inside the app sidebar) ----- */
 .chats-sidebar {
   display: flex;
   flex-direction: column;
-  width: 280px;
-  flex: 0 0 280px;
+  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   height: 100%;
-  border-right: 1px solid var(--glass-border);
   overflow: hidden;
 }
 
@@ -68,7 +68,7 @@
   border-bottom: 1px solid var(--glass-border);
   flex: 0 0 auto;
 }
-.chats-convo-back { display: none; }
+.chats-convo-back { display: inline-flex; }
 .chats-convo-title {
   font-size: 14px;
   font-weight: 700;
@@ -177,6 +177,11 @@
   color: var(--fg-2);
   font-weight: 700;
 }
+.chats-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .chats-new-btn { height: 30px; padding: 0 10px; }
 
 .chats-list-scroll {
@@ -282,12 +287,9 @@
 .chats-rename-cancel:hover { background: rgba(255, 122, 122, 0.15); border-color: rgba(255, 122, 122, 0.45); }
 
 /* ============================================================
-   Responsive — phone (≤768px): list OR conversation, not both
+   Responsive — phone (≤768px): compact new-chat button
    ============================================================ */
 @media (max-width: 768px) {
-  .chats-sidebar { width: 100%; flex: 1 1 0; border-right: none; }
-  .chats-panel.chats-panel-has-convo .chats-sidebar { display: none; }
-  .chats-convo-back { display: inline-flex; }
   .chats-new-btn span { display: none; }
   .chats-new-btn { width: 30px; padding: 0; justify-content: center; border-radius: 5px; }
 }

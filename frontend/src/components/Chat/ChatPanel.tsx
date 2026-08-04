@@ -26,9 +26,31 @@ interface Msg {
   streaming?: boolean;
   thinking?: boolean;
   tools?: ToolEntry[];
+  // Set when the model hit a transient upstream error and we're waiting
+  // before retrying. Contains the attempt # and seconds to wait for display.
+  retrying?: { attempt: number; secs: number; error: string } | null;
 }
 
 const SEP = "|";
+
+// Strip tool-call markers from assistant text before rendering as markdown.
+// Handles three forms the model might emit:
+//   1. ```tool_call\n{json}\n```          (canonical fenced block)
+//   2. {tool_call}{json}                  (inline opener without closing)
+//   3. bare `{tool_call}` markers with no body
+// Also strip any leaked JSON objects that contain "name" + "args" keys
+// near a `{tool_call}` marker.
+const toolBlockRe = /```tool_call\s*\n[\s\S]*?\n```/g;
+const inlineToolCallRe = /\{tool_call\}\s*\{[\s\S]*?\}\s*\{tool_call\}/g;
+const bareToolCallRe = /\{tool_call\}/g;
+function stripToolBlocks(text: string): string {
+  return text
+    .replace(toolBlockRe, "")
+    .replace(inlineToolCallRe, "")
+    .replace(bareToolCallRe, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 interface ChatPanelProps {
   project?: { id: string; name: string; path: string };
@@ -50,9 +72,18 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
   const providers = settings?.ai.providers ?? [];
   const [providerId, setProviderId] = useState(settings?.ai.defaultProvider ?? "");
   const [modelKey, setModelKey] = useState<string>("");
+  // Background task ID for reconnection support. Persisted in localStorage.
+  const [taskId, setTaskId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("kscode:agentTaskId") ?? null;
+    } catch {
+      return null;
+    }
+  });
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const thinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     stop();
@@ -67,6 +98,95 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       setModelKey(chat.provider ? chat.provider + SEP + chat.model : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat?.id]);
+
+  // Reconnection: if there's a saved taskId and we have a chat, reconnect to the background task.
+  useEffect(() => {
+    if (!taskId || !chat) return;
+    // If we already have an active assistant message, the task might still be running.
+    // Check if we need to reconnect (no assistant message, or last one is still streaming).
+    const hasActiveAssistant = messages.some(m => m.role === "assistant" && (m.streaming || m.thinking));
+    if (!hasActiveAssistant) {
+      // No active assistant - we might have missed the stream. Reconnect to get events.
+      reconnectToTask();
+    }
+  }, []); // Run once on mount
+
+  const reconnectToTask = async () => {
+    if (!taskId || !chat) return;
+    let assistantText = ""; // local accumulator for this reconnection
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setBusy(true);
+    // We need to replay events from the beginning (lastEventIdx=0) to rebuild the state.
+    // The server will send all past events then live events.
+    try {
+      await api.agent.streamEvents(taskId, (ev: AgentEvent) => {
+        switch (ev.tag) {
+          case "thinking":
+            patchLastAssistant({ thinking: true, streaming: true });
+            break;
+          case "assistant_delta":
+            if (!ev.delta) break;
+            assistantText += ev.delta;
+            setMessages((cur) => {
+              const copy = [...cur];
+              const last = copy[copy.length - 1];
+              if (last && last.role === "assistant") {
+                copy[copy.length - 1] = { ...last, content: last.content + ev.delta! };
+              } else {
+                // No assistant message yet - create one.
+                copy.push({ role: "assistant", content: ev.delta!, streaming: true, thinking: false, tools: [] });
+              }
+              return copy;
+            });
+            if (thinkTimerRef.current === null) {
+              thinkTimerRef.current = setTimeout(() => {
+                thinkTimerRef.current = null;
+                patchLastAssistant({ thinking: false });
+              }, 600);
+            }
+            break;
+          case "tool_request":
+            if (ev.tool) appendTool({ id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
+            break;
+          case "tool_result":
+            if (ev.result) updateToolResult(ev.result.id, { ok: ev.result.ok, output: ev.result.output });
+            if (thinkTimerRef.current) {
+              clearTimeout(thinkTimerRef.current);
+              thinkTimerRef.current = null;
+            }
+            assistantText = "";
+            patchLastAssistant({ thinking: true });
+            break;
+          case "done":
+            if (thinkTimerRef.current) {
+              clearTimeout(thinkTimerRef.current);
+              thinkTimerRef.current = null;
+            }
+            patchLastAssistant({ thinking: false, streaming: false, retrying: null });
+            setTaskId(null);
+            try { localStorage.removeItem("kscode:agentTaskId"); } catch { /* ignore */ }
+            break;
+          case "retry":
+            if (ev.attempt !== undefined && ev.delayMs !== undefined) {
+              patchLastAssistant({
+                retrying: { attempt: ev.attempt, secs: Math.ceil(ev.delayMs / 1000), error: ev.error ?? "" },
+              });
+            }
+            break;
+          case "error":
+            if (ev.error) throw new Error(ev.error);
+            break;
+        }
+      }, { signal: ac.signal, lastEventIdx: 0 });
+    } catch (e: any) {
+      const aborted = ac.signal.aborted;
+      if (!aborted) setError(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  };
 
   useEffect(() => {
     const el = logRef.current;
@@ -113,9 +233,19 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
     return label;
   }, [parsed]);
 
-  const stop = () => {
+  const stop = async () => {
     abortRef.current?.abort();
     abortRef.current = null;
+    // Also stop the background task on the server.
+    if (taskId) {
+      try {
+        await api.agent.stop(taskId);
+      } catch {
+        /* ignore */
+      }
+      setTaskId(null);
+      try { localStorage.removeItem("kscode:agentTaskId"); } catch { /* ignore */ }
+    }
   };
 
   // Mutate the last assistant message in state with a patch.
@@ -202,9 +332,53 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       }
     }
 
+    let lastPersist = 0;
+    const persistInterval = 800; // ms between incremental saves
+    const persistAssistant = async (text: string, streaming = true) => {
+      if (!chat) return;
+      try {
+        // Only persist periodically to avoid flooding the API
+        const now = Date.now();
+        if (!streaming || now - lastPersist >= persistInterval) {
+          lastPersist = now;
+          await api.chats.append(project!.id, chat.id, "assistant", text);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    // Persist the full assistant message (content + tools) to chat history.
+    const persistFullAssistant = async () => {
+      if (!chat) return;
+      try {
+        setMessages((cur) => {
+          const last = cur[cur.length - 1];
+          if (last && last.role === "assistant") {
+            // Fire-and-forget: we don't await this
+            api.chats.append(project!.id, chat.id, "assistant", last.content);
+          }
+          return cur;
+        });
+      } catch {
+        /* ignore */
+      }
+    };
     let assistantText = "";
     try {
-      await api.agent.stream(req, (ev: AgentEvent) => {
+      // Start (or reconnect to) a background task.
+      let currentTaskId = taskId;
+      if (!currentTaskId) {
+        // No existing task - start a new one.
+        currentTaskId = await api.agent.run(req);
+        setTaskId(currentTaskId);
+        try { localStorage.setItem("kscode:agentTaskId", currentTaskId); } catch { /* ignore */ }
+      } else {
+        // Reconnecting to existing task - the server will replay events.
+        // The task is already running in the background.
+      }
+
+      // Stream events from the background task.
+      await api.agent.streamEvents(currentTaskId, (ev: AgentEvent) => {
         switch (ev.tag) {
           case "thinking":
             patchLastAssistant({ thinking: true, streaming: true });
@@ -218,31 +392,48 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
               if (last && last.role === "assistant") {
                 copy[copy.length - 1] = {
                   ...last,
-                  thinking: false,
                   content: last.content + ev.delta!,
                 };
               }
               return copy;
             });
+            persistAssistant(assistantText, true);
+            if (thinkTimerRef.current === null) {
+              thinkTimerRef.current = setTimeout(() => {
+                thinkTimerRef.current = null;
+                patchLastAssistant({ thinking: false });
+              }, 600);
+            }
             break;
           case "tool_request":
             if (ev.tool) appendTool({ id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
             break;
           case "tool_result":
             if (ev.result) updateToolResult(ev.result.id, { ok: ev.result.ok, output: ev.result.output });
-            // New round: reset streaming text and show thinking again.
+            if (thinkTimerRef.current) {
+              clearTimeout(thinkTimerRef.current);
+              thinkTimerRef.current = null;
+            }
+            persistFullAssistant();
             assistantText = "";
-            setMessages((cur) => {
-              const copy = [...cur];
-              const last = copy[copy.length - 1];
-              if (last && last.role === "assistant") {
-                copy[copy.length - 1] = { ...last, thinking: true, content: "" };
-              }
-              return copy;
-            });
+            patchLastAssistant({ thinking: true });
             break;
           case "done":
-            patchLastAssistant({ thinking: false, streaming: false });
+            if (thinkTimerRef.current) {
+              clearTimeout(thinkTimerRef.current);
+              thinkTimerRef.current = null;
+            }
+            patchLastAssistant({ thinking: false, streaming: false, retrying: null });
+            // Task completed - clear the saved task ID so next prompt starts fresh
+            setTaskId(null);
+            try { localStorage.removeItem("kscode:agentTaskId"); } catch { /* ignore */ }
+            break;
+          case "retry":
+            if (ev.attempt !== undefined && ev.delayMs !== undefined) {
+              patchLastAssistant({
+                retrying: { attempt: ev.attempt, secs: Math.ceil(ev.delayMs / 1000), error: ev.error ?? "" },
+              });
+            }
             break;
           case "error":
             if (ev.error) throw new Error(ev.error);
@@ -269,7 +460,12 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
         return copy;
       });
     } finally {
-      // Finalize the assistant turn and (best-effort) persist its text.
+      // Clear any pending think-clear timer.
+      if (thinkTimerRef.current) {
+        clearTimeout(thinkTimerRef.current);
+        thinkTimerRef.current = null;
+      }
+      // Finalize the assistant turn and persist the full text.
       let finalAssistant = "";
       setMessages((cur) => {
         const copy = [...cur];
@@ -284,7 +480,7 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       abortRef.current = null;
 
       if (chat && finalAssistant) {
-        try { await api.chats.append(project!.id, chat.id, "assistant", finalAssistant); } catch { /* ignore */ }
+        await persistAssistant(finalAssistant, false);
         try { await api.chats.meta(project!.id, chat.id, pId, effModel); } catch { /* ignore */ }
       }
     }
@@ -306,6 +502,12 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
                 <span>thinking…</span>
               </div>
             )}
+            {m.retrying && (
+              <div className="retrying-pill" aria-live="polite">
+                <IconSpinner size={13} className="icon-spin" />
+                <span>retrying in {m.retrying.secs}s (attempt {m.retrying.attempt})</span>
+              </div>
+            )}
             {m.tools && m.tools.length > 0 && (
               <div className="tool-cards">
                 {m.tools.map((t) => (
@@ -317,7 +519,7 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
               className="chat-msg-body md-body"
               dangerouslySetInnerHTML={{
                 __html:
-                  renderMarkdown(m.content) +
+                  renderMarkdown(stripToolBlocks(m.content)) +
                   (m.streaming && !m.thinking ? '<span class="chat-cursor">\u258B</span>' : ""),
               }}
             />
@@ -522,4 +724,85 @@ function ModelPicker({
       )}
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * ToolCard — collapsible card showing a tool's invocation + result.
+ * ------------------------------------------------------------------ */
+function ToolCard({ tool }: { tool: ToolEntry }) {
+  const [open, setOpen] = useState(false);
+  const hasResult = !!tool.result;
+  const argSummary = useMemo(() => {
+    try {
+      const a = tool.args ?? {};
+      if (typeof a === "string") return a;
+      // Tool-specific headline summaries.
+      if (Array.isArray(a.edits) && a.path) {
+        return `${a.path} (${a.edits.length} edit${a.edits.length === 1 ? "" : "s"})`;
+      }
+      if (tool.name === "patch") {
+        const p = typeof a.patch === "string" ? a.patch : "";
+        const fileMatch = p.match(/^\+\+\+ b\/([^\s]+)/m);
+        return fileMatch ? `=> ${fileMatch[1]}` : "unified diff";
+      }
+      // Pick the most informative field for the headline.
+      const keys = Object.keys(a);
+      const preferred = ["command", "path", "pattern", "from", "content", "old_string"];
+      for (const k of preferred) {
+        if (a[k] !== undefined) {
+          let v = String(a[k]);
+          if (v.length > 80) v = v.slice(0, 80) + "…";
+          return k === "command" ? v : k === "old_string" ? `→ ${a.path ?? ""}: ${v}` : `${k}: ${v}`;
+        }
+      }
+      if (keys.length) return JSON.stringify(a).slice(0, 80);
+      return "";
+    } catch {
+      return "";
+    }
+  }, [tool.args, tool.name]);
+
+  return (
+    <div className={"tool-card tool-card-" + (hasResult ? (tool.result?.ok ? "ok" : "err") : "pending")}>
+      <button
+        type="button"
+        className="tc-head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="tc-icon"><IconTool size={13} /></span>
+        <span className="tc-name">{tool.name}</span>
+        {argSummary && <span className="tc-arg">{argSummary}</span>}
+        <span className="tc-status">
+          {!hasResult && <span className="tc-spin"><IconSpinner size={11} className="icon-spin" /></span>}
+          {hasResult && (tool.result?.ok ? "done" : "error")}
+        </span>
+        <span className="tc-chev">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="tc-body">
+          <div className="tc-section">
+            <div className="tc-label">args</div>
+            <pre className="tc-pre">{formatArgs(tool.args)}</pre>
+          </div>
+          {hasResult && (
+            <div className="tc-section">
+              <div className="tc-label">result</div>
+              <pre className={"tc-pre" + (tool.result?.ok ? "" : " tc-pre-err")}>{tool.result?.output}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatArgs(args: any): string {
+  if (args == null) return "";
+  if (typeof args === "string") return args;
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
 }
