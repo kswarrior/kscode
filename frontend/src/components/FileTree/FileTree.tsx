@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import type { FileEntry } from "../../types";
 import { api } from "../../api/client";
 import {
@@ -10,8 +10,13 @@ import {
   IconFolderOpen,
   IconPlus,
   IconTrash,
+  IconDownload,
+  IconUpload,
+  IconLink,
 } from "../Icon";
+import { DropdownMenu } from "../DropdownMenu";
 import "./FileTree.css";
+import "../DropdownMenu.css";
 
 interface Props {
   entry: FileEntry | null;
@@ -40,6 +45,7 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState(node.name);
+  const [uploading, setUploading] = useState(false);
 
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -106,6 +112,64 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
     }
   };
 
+  const handleDownload = () => {
+    const url = api.files.download(node.path);
+    window.open(url, "_blank");
+  };
+
+  const handleDownloadZip = async () => {
+    if (!node.isDir) return;
+    const url = api.files.downloadZip(node.path);
+    window.open(url, "_blank");
+  };
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    try {
+      await api.files.upload(node.path, file);
+      onRefresh();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleUploadUrl = async () => {
+    const url = prompt("Enter URL to download:");
+    if (!url) return;
+    setUploading(true);
+    try {
+      await api.files.uploadUrl(url, node.path);
+      onRefresh();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const fileActions = [
+    { label: "Download", onClick: handleDownload, icon: <IconDownload size={14} /> },
+    { label: "Rename", onClick: () => setRenaming(true), icon: <IconEdit size={14} /> },
+    { divider: true },
+    { label: "Delete", onClick: doDelete, icon: <IconTrash size={14} />, danger: true },
+  ];
+
+  const folderActions = [
+    { label: "New Folder", onClick: doMkdir, icon: <IconPlus size={14} /> },
+    { label: "New File", onClick: doNewFile, icon: <IconFile size={14} /> },
+    { divider: true },
+    { label: "Download as ZIP", onClick: handleDownloadZip, icon: <IconDownload size={14} /> },
+    { label: "Upload File", onClick: () => fileInputRef.current?.click(), icon: <IconUpload size={14} /> },
+    { label: "Upload from URL", onClick: handleUploadUrl, icon: <IconLink size={14} /> },
+    { divider: true },
+    { label: "Rename", onClick: () => setRenaming(true), icon: <IconEdit size={14} /> },
+    { label: "Delete", onClick: doDelete, icon: <IconTrash size={14} />, danger: true },
+  ];
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   return (
     <li className="ft-node" style={{ paddingLeft: depth * 14 }}>
       <div className={"ft-row" + (busy ? " ft-busy" : "")} onClick={toggle}>
@@ -132,20 +196,20 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
             {node.name}
           </span>
         )}
-        <span className="ft-actions">
-          <button title="New folder" onClick={(e) => { e.stopPropagation(); doMkdir(); }}>
-            <IconPlus size={14} />
-          </button>
-          <button title="New file" onClick={(e) => { e.stopPropagation(); doNewFile(); }}>
-            <IconFile size={14} />
-          </button>
-          <button title="Rename" onClick={(e) => { e.stopPropagation(); setRenaming(true); }}>
-            <IconEdit size={14} />
-          </button>
-          <button title="Delete" onClick={(e) => { e.stopPropagation(); doDelete(); }}>
-            <IconTrash size={14} />
-          </button>
-        </span>
+        <DropdownMenu
+          items={node.isDir ? folderActions : fileActions}
+          alignRight
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleUpload(file);
+            e.target.value = "";
+          }}
+        />
       </div>
       {node.isDir && expanded && node.children && (
         <ul className="ft-children">
@@ -165,6 +229,47 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
 }
 
 export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Props) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDownloadProject = () => {
+    const url = api.files.downloadProject();
+    window.open(url, "_blank");
+  };
+
+  const handleUploadProject = async (file: File) => {
+    setUploading(true);
+    try {
+      await api.files.upload("/", file);
+      onRefresh();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleUploadUrlProject = async () => {
+    const url = prompt("Enter URL to download:");
+    if (!url) return;
+    setUploading(true);
+    try {
+      await api.files.uploadUrl(url, "/");
+      onRefresh();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const headerActions = [
+    { label: "Download Project as ZIP", onClick: handleDownloadProject, icon: <IconDownload size={14} /> },
+    { divider: true },
+    { label: "Upload File", onClick: () => fileInputRef.current?.click(), icon: <IconUpload size={14} /> },
+    { label: "Upload from URL", onClick: handleUploadUrlProject, icon: <IconLink size={14} /> },
+  ];
+
   if (loading) return <div className="filetree"><div className="ft-status">Loading...</div></div>;
   if (error) return <div className="filetree"><div className="ft-error">Error: {error}</div></div>;
   if (!entry) return <div className="filetree"><div className="ft-status">No workspace</div></div>;
@@ -172,11 +277,22 @@ export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Pro
     <div className="filetree">
       <div className="ft-header">
         <span className="ft-title">EXPLORER</span>
+        <DropdownMenu items={headerActions} alignRight />
       </div>
       <div className="ft-root-label" title={root}>{root || "workspace"}</div>
       <ul className="ft-list">
         <TreeNode node={entry} depth={0} onOpen={onOpen} onRefresh={onRefresh} />
       </ul>
+      <input
+        ref={fileInputRef}
+        type="file"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleUploadProject(file);
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }

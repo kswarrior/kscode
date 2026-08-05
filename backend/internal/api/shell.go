@@ -23,6 +23,9 @@ func NewShellHandler(mgr *shell.Manager, cwdFn func() string) *ShellHandler {
 func (h *ShellHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/shell/start", h.handleStart)
 	mux.HandleFunc("/api/shell/ws", h.handleWS)
+	mux.HandleFunc("/api/shell/list", h.handleList)
+	mux.HandleFunc("/api/shell/stop", h.handleStop)
+	mux.HandleFunc("/api/shell/rename", h.handleRename)
 }
 
 func newID() string {
@@ -41,6 +44,7 @@ func (h *ShellHandler) handleStart(w http.ResponseWriter, r *http.Request) {
 		Rows  int    `json:"rows"`
 		Cwd   string `json:"cwd"`
 		Shell string `json:"shell"`
+		Name  string `json:"name"`
 	}
 	if err := parseJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -56,6 +60,7 @@ func (h *ShellHandler) handleStart(w http.ResponseWriter, r *http.Request) {
 		Cols:  req.Cols,
 		Rows:  req.Rows,
 		Shell: req.Shell,
+		Name:  req.Name,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -157,5 +162,52 @@ func (h *ShellHandler) handleWS(w http.ResponseWriter, r *http.Request) {
 		case <-done:
 			return
 		}
+	}
+}
+
+func (h *ShellHandler) handleList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": h.mgr.List()})
+}
+
+func (h *ShellHandler) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := parseJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if h.mgr.Kill(req.ID) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	} else {
+		writeError(w, http.StatusNotFound, "session not found")
+	}
+}
+
+func (h *ShellHandler) handleRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := parseJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if h.mgr.SetName(req.ID, req.Name) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	} else {
+		writeError(w, http.StatusNotFound, "session not found")
 	}
 }

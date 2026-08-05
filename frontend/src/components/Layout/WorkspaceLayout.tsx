@@ -3,12 +3,15 @@ import { useWorkspace } from "../../hooks/useWorkspace";
 import { useSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../hooks/useProjects";
 import { useChats } from "../../hooks/useChats";
+import { useTerminals } from "../../hooks/useTerminals";
 import type { Project } from "../../types";
 import { FileTree } from "../FileTree/FileTree";
 import { CodeEditor } from "../Editor/Editor";
 import { SettingsPanel } from "../Settings/Settings";
 import { ChatsPanel } from "../ChatsPanel/ChatsPanel";
 import { ChatsList } from "../ChatsPanel/ChatsList";
+import { TerminalsPanel } from "../Terminal/TerminalsPanel";
+import { TerminalsList } from "../Terminal/TerminalsList";
 import { ProjectDropdownMenu } from "../ChatsPanel/ProjectDropdownMenu";
 import { ProjectFormDialog } from "../ChatsPanel/ProjectFormDialog";
 import { SearchPanel } from "../Search/SearchPanel";
@@ -20,18 +23,20 @@ import {
   IconMenu,
   IconSearch,
   IconSettings,
+  IconTerminal,
 } from "../Icon";
 import "./WorkspaceLayout.css";
 
 type SidebarTab = "explorer" | "search";
 // Which "page" is shown in the main area. Header + sidebar persist across pages.
-type MainPage = "chat" | "editor" | "settings";
+type MainPage = "chat" | "editor" | "settings" | "terminal";
 
 export function WorkspaceLayout() {
   const ws = useWorkspace();
   const { settings } = useSettings();
   const projects = useProjects();
   const chats = useChats(projects.active);
+  const terminals = useTerminals(projects.active);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("explorer");
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -142,6 +147,14 @@ export function WorkspaceLayout() {
             <IconFiles />
           </button>
           <button
+            className={"icon-btn" + (mainPage === "terminal" ? " active" : "")}
+            onClick={() => setMainPage("terminal")}
+            aria-label="Terminal"
+            title="Terminal"
+          >
+            <IconTerminal />
+          </button>
+          <button
             className={"icon-btn" + (mainPage === "settings" ? " active" : "")}
             onClick={() => setMainPage("settings")}
             aria-label="Settings"
@@ -164,6 +177,12 @@ export function WorkspaceLayout() {
                 chatsApi={chats}
                 onClose={() => setSidebarOpen(false)}
                 onOpenChat={() => { if (isMobile) setSidebarOpen(false); }}
+              />
+            ) : mainPage === "terminal" ? (
+              <TerminalsList
+                active={terminals}
+                onClose={() => setSidebarOpen(false)}
+                onOpenTerminal={() => { if (isMobile) setSidebarOpen(false); }}
               />
             ) : (
               <>
@@ -216,6 +235,11 @@ export function WorkspaceLayout() {
           {mainPage === "editor" && (
             <div className="page page-editor glass">
               <CodeEditor filePath={activePath} ui={ui} />
+            </div>
+          )}
+          {mainPage === "terminal" && (
+            <div className="page page-terminal glass">
+              <TerminalsPanel project={projects.active} terminalsApi={terminals} />
             </div>
           )}
           {mainPage === "settings" && (

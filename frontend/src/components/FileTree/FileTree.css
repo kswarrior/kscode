@@ -9,6 +9,7 @@
 .ft-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 10px 12px;
   flex: 0 0 auto;
 }
@@ -68,7 +69,6 @@
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.06);
 }
-.ft-row:hover .ft-actions { opacity: 1; }
 .ft-busy { opacity: 0.5; }
 
 .ft-chevron {
@@ -98,32 +98,6 @@
 }
 .ft-dir { font-weight: 600; color: var(--fg-0); }
 
-.ft-actions {
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity .12s ease;
-  flex: 0 0 auto;
-}
-.ft-actions button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--glass-border);
-  color: var(--fg-2);
-  cursor: pointer;
-  width: 22px; height: 20px;
-  padding: 0;
-  border-radius: 6px;
-  line-height: 1;
-  transition: background .12s ease, color .12s ease;
-}
-.ft-actions button:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--fg-0);
-}
-
 .ft-rename {
   background: rgba(0, 0, 0, 0.5);
   color: var(--fg-0);
@@ -147,5 +121,4 @@
 /* touch-friendly on small screens: always show actions */
 @media (max-width: 768px) {
   .ft-row { height: 36px; }
-  .ft-actions { opacity: 1; }
 }

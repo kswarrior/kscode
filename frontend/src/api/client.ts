@@ -5,6 +5,7 @@ import type {
   Settings,
   Provider,
   ShellStartResponse,
+  ShellSession,
   ChatRequest,
   ChatResponse,
   Project,
@@ -124,6 +125,23 @@ export const api = {
       }),
     search: (q: string) =>
       req<{ results: SearchResult[] }>(`/files/search?q=${encodeURIComponent(q)}`),
+    download: (path: string) => `/files/download?path=${encodeURIComponent(path)}`,
+    downloadZip: (path: string) => `/files/download-zip?path=${encodeURIComponent(path)}`,
+    downloadProject: () => `/files/download-project`,
+    upload: (path: string, file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("path", path);
+      return fetch(`${BASE}/files/upload`, { method: "POST", body: formData }).then((res) => {
+        if (!res.ok) throw new Error("Upload failed");
+        return res.json();
+      });
+    },
+    uploadUrl: (url: string, path: string) =>
+      req<{ status: string; path: string }>(`/files/upload-url`, {
+        method: "POST",
+        body: JSON.stringify({ url, path }),
+      }),
   },
 
   settings: {
@@ -148,7 +166,7 @@ export const api = {
   },
 
   shell: {
-    start: (opts: { cols?: number; rows?: number; cwd?: string; shell?: string }) =>
+    start: (opts: { cols?: number; rows?: number; cwd?: string; shell?: string; name?: string }) =>
       req<ShellStartResponse>(`/shell/start`, {
         method: "POST",
         body: JSON.stringify(opts),
@@ -157,6 +175,17 @@ export const api = {
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       return `${proto}//${window.location.host}/api/shell/ws?id=${id}`;
     },
+    list: () => req<{ sessions: ShellSession[] }>(`/shell/list`),
+    stop: (id: string) =>
+      req<{ ok: boolean }>(`/shell/stop`, {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      }),
+    rename: (id: string, name: string) =>
+      req<{ ok: boolean }>(`/shell/rename`, {
+        method: "POST",
+        body: JSON.stringify({ id, name }),
+      }),
   },
 
   llm: {
@@ -233,12 +262,13 @@ export const api = {
       onEvent: (ev: AgentEvent) => void,
       opts?: { signal?: AbortSignal; lastEventIdx?: number },
     ): Promise<void> => {
-      const url = new URL(`${BASE}/agent/stream`);
-      url.searchParams.set("taskId", taskId);
+      const qs = new URLSearchParams();
+      qs.set("taskId", taskId);
       if (opts?.lastEventIdx !== undefined) {
-        url.searchParams.set("lastEvent", String(opts.lastEventIdx));
+        qs.set("lastEvent", String(opts.lastEventIdx));
       }
-      const res = await fetch(url.toString(), {
+      const url = `${BASE}/agent/stream?${qs.toString()}`;
+      const res = await fetch(url, {
         headers: { Accept: "text/event-stream" },
         signal: opts?.signal,
       });

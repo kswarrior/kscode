@@ -52,6 +52,54 @@ function stripToolBlocks(text: string): string {
     .trim();
 }
 
+// A renderable segment of an assistant turn: either a chunk of prose
+// (already converted to HTML markdown) or an inline tool card placeholder.
+type Segment =
+  | { kind: "text"; html: string }
+  | { kind: "tool"; tool: ToolEntry };
+
+// Splits an assistant message body into an ordered list of prose + tool
+// segments, so tool cards render INLINE at the exact spot the model wrote
+// them (mirroring opencode / Claude Code) rather than in a stacked block
+// above the text. The model emits tool calls in a deterministic order that
+// matches the `tools` array we accumulate from tool_request events, so we
+// pair each detected fence/inline marker with the corresponding tool.
+function splitSegments(text: string, tools: ToolEntry[]): Segment[] {
+  // ONE combined regex that matches fenced ```tool_call blocks OR inline
+  // {tool_call}{...}{tool_call} markers, in the order they appear.
+  const re = /```tool_call\s*\n[\s\S]*?\n```/g;
+  const segs: Segment[] = [];
+  let lastIndex = 0;
+  let toolIdx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    // Prose before this tool block.
+    const prose = text.slice(lastIndex, m.index);
+    if (prose.replace(/\s/g, "")) {
+      segs.push({ kind: "text", html: renderMarkdown(prose) });
+    }
+    // The tool card (paired by position; clamped to available tools).
+    if (toolIdx < tools.length) {
+      segs.push({ kind: "tool", tool: tools[toolIdx++] });
+    }
+    lastIndex = m.index + m[0].length;
+  }
+  // Trailing prose after the last tool block.
+  const tail = text.slice(lastIndex);
+  // Also strip any bare/inline tool_call markers that weren't real blocks.
+  const cleanTail = tail.replace(inlineToolCallRe, "").replace(bareToolCallRe, "");
+  if (cleanTail.replace(/\s/g, "")) {
+    segs.push({ kind: "text", html: renderMarkdown(cleanTail.replace(/\n{3,}/g, "\n\n").trim()) });
+  }
+  // If no tool blocks were embedded in the text but tools exist (e.g. they
+  // arrived as separate events without a fenced block in the stream), append
+  // them at the end so they're still visible inline after the prose.
+  while (toolIdx < tools.length) {
+    segs.push({ kind: "tool", tool: tools[toolIdx++] });
+  }
+  return segs;
+}
+
 interface ChatPanelProps {
   project?: { id: string; name: string; path: string };
   chat?: {
@@ -123,6 +171,7 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       await api.agent.streamEvents(taskId, (ev: AgentEvent) => {
         switch (ev.tag) {
           case "thinking":
+            ensureAssistant();
             patchLastAssistant({ thinking: true, streaming: true });
             break;
           case "assistant_delta":
@@ -248,6 +297,15 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
     }
   };
 
+  // Ensure the last message is an assistant placeholder so thinking deltas can accumulate.
+  const ensureAssistant = () => {
+    setMessages((cur) => {
+      const last = cur[cur.length - 1];
+      if (last && last.role === "assistant") return cur;
+      return [...cur, { role: "assistant", content: "", thinking: false, streaming: true, tools: [] }];
+    });
+  };
+
   // Mutate the last assistant message in state with a patch.
   const patchLastAssistant = (patch: Partial<Msg>) => {
     setMessages((cur) => {
@@ -306,7 +364,12 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
 
     // Build the conversation sent to the agent. Tool cards live in the UI
     // only; the model already saw tool results as user messages server-side.
-    const priorMessages = messages.map((m) => ({ role: m.role, content: m.content }));
+    // Strip tool_call blocks from prior assistant messages so the model
+    // doesn't re-encounter its own raw tool-call fences as context noise.
+    const priorMessages = messages.map((m) => ({
+      role: m.role,
+      content: m.role === "assistant" ? stripToolBlocks(m.content) : m.content,
+    })).filter((m) => m.content.length > 0);
     const agentMessages = [
       ...(project?.path
         ? [{
@@ -322,6 +385,7 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       provider: pId,
       model: effModel || (parsed.p?.models?.[0] ?? ""),
       messages: agentMessages,
+      maxRounds: 50,
     };
 
     if (chat) {
@@ -381,6 +445,7 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       await api.agent.streamEvents(currentTaskId, (ev: AgentEvent) => {
         switch (ev.tag) {
           case "thinking":
+            ensureAssistant();
             patchLastAssistant({ thinking: true, streaming: true });
             break;
           case "assistant_delta":
@@ -494,38 +559,65 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
             <p>Start a conversation with the AI.</p>
           </div>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className={"chat-msg chat-msg-" + m.role}>
-            {m.thinking && (
-              <div className="thinking-pill" aria-live="polite">
-                <IconSpinner size={13} className="icon-spin" />
-                <span>thinking…</span>
-              </div>
-            )}
-            {m.retrying && (
-              <div className="retrying-pill" aria-live="polite">
-                <IconSpinner size={13} className="icon-spin" />
-                <span>retrying in {m.retrying.secs}s (attempt {m.retrying.attempt})</span>
-              </div>
-            )}
-            {m.tools && m.tools.length > 0 && (
-              <div className="tool-cards">
-                {m.tools.map((t) => (
-                  <ToolCard key={t.id} tool={t} />
-                ))}
-              </div>
-            )}
-            <div
-              className="chat-msg-body md-body"
-              dangerouslySetInnerHTML={{
-                __html:
-                  renderMarkdown(stripToolBlocks(m.content)) +
-                  (m.streaming && !m.thinking ? '<span class="chat-cursor">\u258B</span>' : ""),
-              }}
-            />
-          </div>
-        ))}
+        {messages.map((m, i) => {
+          const isAssistant = m.role === "assistant";
+          const hasTools = isAssistant && m.tools && m.tools.length > 0;
+          const segments = hasTools ? splitSegments(m.content, m.tools!) : null;
+          const cursor = m.streaming && !m.thinking ? '<span class="chat-cursor">\u258B</span>' : "";
+          return (
+            <div key={i} className={"chat-msg chat-msg-" + m.role}>
+              {hasTools && segments ? (
+                <div className="chat-msg-body md-body md-inline-flow">
+                  {segments.map((seg, si) =>
+                    seg.kind === "text" ? (
+                      <div
+                        key={"t" + si}
+                        className="md-seg"
+                        dangerouslySetInnerHTML={{ __html: seg.html + (si === segments.length - 1 ? cursor : "") }}
+                      />
+                    ) : (
+                      <ToolCard key={seg.tool.id} tool={seg.tool} />
+                    ),
+                  )}
+                </div>
+              ) : (
+                <div
+                  className="chat-msg-body md-body"
+                  dangerouslySetInnerHTML={{
+                    __html:
+                      renderMarkdown(isAssistant ? stripToolBlocks(m.content) : m.content) + cursor,
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
+
+      {/* Persistent bottom status bar: shows thinking / retrying state
+          across ALL messages while the agent is working. Mirrors the
+          "agent is working…" bar in opencode / Claude Code. */}
+      {(busy || messages.some((m) => m.thinking || m.retrying)) && (
+        <div className="agent-statusbar">
+          {messages.some((m) => m.retrying) ? (
+            (() => {
+              const r = messages.find((m) => m.retrying)?.retrying;
+              return r ? (
+                <div className="statusbar-pill retrying-pill" aria-live="polite">
+                  <IconSpinner size={13} className="icon-spin" />
+                  <span>retrying in {r.secs}s (attempt {r.attempt})</span>
+                </div>
+              ) : null;
+            })()
+          ) : (
+            <div className="statusbar-pill thinking-pill" aria-live="polite">
+              <IconSpinner size={13} className="icon-spin" />
+              <span>thinking…</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {error && <div className="chat-error">{error}</div>}
       <div className="chat-input-wrap">
         <div className="chat-input">

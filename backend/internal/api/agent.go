@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"kscode/internal/agent"
@@ -129,7 +128,7 @@ func (h *AgentHandler) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Replay events from lastEventIdx
-		allEvents := task.getAllEvents()
+		allEvents := task.GetAllEvents()
 		if lastEventIdx >= 0 && lastEventIdx < len(allEvents) {
 			for _, e := range allEvents[lastEventIdx:] {
 				send(e.Event)
@@ -145,14 +144,14 @@ func (h *AgentHandler) handleStream(w http.ResponseWriter, r *http.Request) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				allEvents := task.getAllEvents()
+				allEvents := task.GetAllEvents()
 				for eventStartIdx < len(allEvents) {
 					send(allEvents[eventStartIdx].Event)
 					eventStartIdx++
 				}
-				if task.getStatus() == agent.TaskStatusCompleted ||
-					task.getStatus() == agent.TaskStatusStopped ||
-					task.getStatus() == agent.TaskStatusError {
+				if task.GetStatus() == agent.TaskStatusCompleted ||
+					task.GetStatus() == agent.TaskStatusStopped ||
+					task.GetStatus() == agent.TaskStatusError {
 					return
 				}
 			}

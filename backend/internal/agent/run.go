@@ -88,7 +88,7 @@ func Run(ctx context.Context, llmClient *llm.Client, cfg RunConfig, onEvent func
 	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds <= 0 {
-		maxRounds = 20
+		maxRounds = 50
 	}
 	system := cfg.System
 	if system == "" {
@@ -315,4 +315,11 @@ func parseToolCalls(text string) []ToolCall {
 		})
 	}
 	return calls
+}
+
+// hasToolCallBlock reports whether the text contains any ```tool_call fenced
+// block at all (even if malformed). Used to distinguish "model finished"
+// from "model tried to call a tool but it was malformed".
+func hasToolCallBlock(text string) bool {
+	return toolCallBlock.FindStringSubmatchIndex(text) != nil
 }

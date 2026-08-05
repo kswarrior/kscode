@@ -58,7 +58,7 @@ export function SettingsPanel() {
   }, []);
 
   if (loading && !draft) {
-    return <div className="settings-page"><div className="sp-status">Loading…</div></div>;
+    return <div className="settings-page"><div className="sp-status">Loading\u2026</div></div>;
   }
   const current = draft ?? settings;
   if (!current) return null;
@@ -207,7 +207,7 @@ export function SettingsPanel() {
         {tab === "general" ? (
           <p className="sp-empty">No general settings yet.</p>
         ) : (
-        <section className="sp-section ai-providers-section">
+        <>
           <div className="sp-card-header">
             <h3 className="row"><IconChat size={14} /> Providers</h3>
             <div className="connect-dropdown" ref={connectDropdownRef}>
@@ -234,90 +234,37 @@ export function SettingsPanel() {
             </div>
           </div>
 
-          {editorOpen ? (
-            <ProviderEditor
-              mode={editorMode}
-              provider={customProvider}
-              onChange={(patch) => setCustomProvider((prev) => ({ ...prev, ...patch }))}
-              onSave={handleSaveEditor}
-              onCancel={closeEditor}
-              onAddModel={(name) => setCustomProvider((prev) => ({ ...prev, models: [...(prev.models ?? []), name] }))}
-              onRemoveModel={(name) => setCustomProvider((prev) => ({ ...prev, models: (prev.models ?? []).filter((m) => m !== name) }))}
-            />
-          ) : (
-            <div className="sp-provider-list">
-              {connectedProviders.length === 0 && (
-                <p className="sp-providers-empty">
-                  No providers connected yet. Click <strong>Connect</strong> to add one.
-                </p>
-              )}
-              {connectedProviders.map((p) => (
-                <ProviderCard
-                  key={p.id}
-                  provider={p}
-                  onEdit={() => handleEditProvider(p)}
-                  onDisconnect={() => handleDisconnect(p)}
-                  onDelete={() => doDelete(p.id)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- * ProviderCard — simple card showing provider name + 3-dot menu.
- * ------------------------------------------------------------------ */
-function ProviderCard({
-  provider,
-  onEdit,
-  onDisconnect,
-  onDelete,
-}: {
-  provider: Provider;
-  onEdit: () => void;
-  onDisconnect: () => void;
-  onDelete: () => void;
-}) {
-  const [showMenu, setShowMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  return (
-    <div className="provider-card">
-      <div className="pc-info">
-        <span className="pc-name">{provider.name}</span>
-        {!provider.enabled && <span className="pc-badge">disconnected</span>}
-      </div>
-      <div className="pc-menu" ref={menuRef}>
-        <button className="icon-btn" onClick={() => setShowMenu(!showMenu)} aria-label="More options">
-          <IconMoreVertical size={16} />
-        </button>
-        {showMenu && (
-          <ul className="pc-menu-dropdown glass-strong" role="menu">
-            <li role="menuitem" className="pc-menu-item" onClick={() => { onEdit(); setShowMenu(false); }}>
-              <IconEdit size={14} /> Edit
-            </li>
-            <li role="menuitem" className="pc-menu-item" onClick={() => { onDisconnect(); setShowMenu(false); }}>
-              <IconClose size={14} /> Disconnect
-            </li>
-            <li role="menuitem" className="pc-menu-item danger" onClick={() => { onDelete(); setShowMenu(false); }}>
-              <IconTrash size={14} /> Delete
-            </li>
-          </ul>
+          <section className="sp-section ai-providers-section">
+            {editorOpen ? (
+              <ProviderEditor
+                mode={editorMode}
+                provider={customProvider}
+                onChange={(patch) => setCustomProvider((prev) => ({ ...prev, ...patch }))}
+                onSave={handleSaveEditor}
+                onCancel={closeEditor}
+                onAddModel={(name) => setCustomProvider((prev) => ({ ...prev, models: [...(prev.models ?? []), name] }))}
+                onRemoveModel={(name) => setCustomProvider((prev) => ({ ...prev, models: (prev.models ?? []).filter((m) => m !== name) }))}
+              />
+            ) : (
+              <div className="sp-provider-list">
+                {connectedProviders.length === 0 && (
+                  <p className="sp-providers-empty">
+                    No providers connected yet. Click <strong>Connect</strong> to add one.
+                  </p>
+                )}
+                {connectedProviders.map((p) => (
+                  <ProviderCard
+                    key={p.id}
+                    provider={p}
+                    onEdit={() => handleEditProvider(p)}
+                    onDisconnect={() => handleDisconnect(p)}
+                    onDelete={() => doDelete(p.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        </>
         )}
       </div>
     </div>
@@ -428,6 +375,59 @@ function ProviderEditor({
         <button className="btn btn-primary" onClick={onSave}>
           {isAdd ? "Add Provider" : "Save Changes"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * ProviderCard — a single connected-provider row in the providers list.
+ * Shows the provider name, its model count, and Edit / Disconnect actions.
+ * ------------------------------------------------------------------ */
+function ProviderCard({
+  provider,
+  onEdit,
+  onDisconnect,
+  onDelete,
+}: {
+  provider: Provider;
+  onEdit: () => void;
+  onDisconnect: () => void;
+  onDelete: () => void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  return (
+    <div className="sp-provider-card">
+      <div className="sp-provider-info">
+        <span className="sp-provider-name">{provider.name || provider.id}</span>
+        {provider.models && provider.models.length > 0 && (
+          <span className="sp-provider-models">
+            {provider.models.length} model{provider.models.length === 1 ? "" : "s"}
+          </span>
+        )}
+        {provider.baseUrl && (
+          <span className="sp-provider-url" title={provider.baseUrl}>{provider.baseUrl}</span>
+        )}
+      </div>
+      <div className="sp-provider-actions">
+        <button className="btn btn-ghost" onClick={onEdit} title="Edit provider">
+          <IconEdit size={13} /> <span>Edit</span>
+        </button>
+        <button className="btn btn-ghost" onClick={onDisconnect} title="Disconnect provider">
+          <IconClose size={13} /> <span>Disconnect</span>
+        </button>
+        {confirmDelete ? (
+          <span className="sp-confirm-row">
+            <button className="btn btn-danger" onClick={onDelete} title="Confirm delete">
+              <IconTrash size={13} /> <span>Confirm</span>
+            </button>
+            <button className="btn btn-ghost" onClick={() => setConfirmDelete(false)}>Cancel</button>
+          </span>
+        ) : (
+          <button className="btn btn-ghost" onClick={() => setConfirmDelete(true)} title="Delete provider (also removes saved key)">
+            <IconTrash size={13} />
+          </button>
+        )}
       </div>
     </div>
   );

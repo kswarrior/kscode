@@ -96,6 +96,40 @@
   padding: 12px;
 }
 
+/* Persistent bottom status bar — shows "thinking…" / "retrying…" while the
+   agent is working. Sits between the chat log and the composer, mirroring
+   the working-indicator bar in opencode / Claude Code. Never rendered as a
+   card inside the message stream. */
+.agent-statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  min-height: 36px;
+}
+.statusbar-pill {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  animation: thinkPulse 1.6s ease-in-out infinite;
+}
+.statusbar-pill.retrying-pill {
+  background: rgba(240, 150, 50, 0.15);
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.statusbar-pill .icon-spin { color: var(--fg-1); }
+.statusbar-pill.retrying-pill .icon-spin { color: var(--warn); }
+
 .chat-input {
   display: flex;
   flex-direction: column;
@@ -411,6 +445,27 @@
   animation: thinkPulse 1.6s ease-in-out infinite;
 }
 .retrying-pill .icon-spin { color: var(--warn); }
+
+/* ------------------------------------------------------------------ *
+ * Inline flow rendering — prose and tool cards interleaved vertically
+ * in the assistant's natural reading order (not stacked above the text).
+ * ------------------------------------------------------------------ */
+.md-inline-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.md-inline-flow .md-seg {
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg-1);
+  padding: 2px 0;
+}
+.md-inline-flow > .tool-card {
+  margin: 0;
+  width: 100%;
+}
 
 /* ------------------------------------------------------------------ *
  * Tool cards — collapsible invocation cards rendered inline in the

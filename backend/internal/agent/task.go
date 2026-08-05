@@ -49,35 +49,35 @@ type BackgroundTask struct {
 	mu          sync.Mutex
 }
 
-func (t *BackgroundTask) addEvent(ev Event) {
+func (t *BackgroundTask) AddEvent(ev Event) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.Events = append(t.Events, TaskEvent{Event: ev, Timestamp: time.Now()})
 	t.UpdatedAt = time.Now()
 }
 
-func (t *BackgroundTask) setStatus(status TaskStatus) {
+func (t *BackgroundTask) SetStatus(status TaskStatus) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.Status = status
 	t.UpdatedAt = time.Now()
 }
 
-func (t *BackgroundTask) setFinalText(text string) {
+func (t *BackgroundTask) SetFinalText(text string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.FinalText = text
 	t.UpdatedAt = time.Now()
 }
 
-func (t *BackgroundTask) setError(err string) {
+func (t *BackgroundTask) SetError(err string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.Error = err
 	t.UpdatedAt = time.Now()
 }
 
-func (t *BackgroundTask) getEventsSince(index int) []TaskEvent {
+func (t *BackgroundTask) GetEventsSince(index int) []TaskEvent {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if index < 0 || index >= len(t.Events) {
@@ -86,13 +86,13 @@ func (t *BackgroundTask) getEventsSince(index int) []TaskEvent {
 	return t.Events[index:]
 }
 
-func (t *BackgroundTask) getAllEvents() []TaskEvent {
+func (t *BackgroundTask) GetAllEvents() []TaskEvent {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]TaskEvent{}, t.Events...)
 }
 
-func (t *BackgroundTask) getStatus() TaskStatus {
+func (t *BackgroundTask) GetStatus() TaskStatus {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.Status
@@ -154,14 +154,14 @@ func (m *TaskManager) ListTasks() []*BackgroundTask {
 
 // StartTask runs the agent in the background, emitting events to the task.
 func (m *TaskManager) StartTask(task *BackgroundTask, llmClient *llm.Client) {
-	task.setStatus(TaskStatusRunning)
-	task.addEvent(Event{Tag: EventThinking, Round: 1})
+	task.SetStatus(TaskStatusRunning)
+	task.AddEvent(Event{Tag: EventThinking, Round: 1})
 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				task.setError(fmt.Sprintf("panic: %v", r))
-				task.setStatus(TaskStatusError)
+				task.SetError(fmt.Sprintf("panic: %v", r))
+				task.SetStatus(TaskStatusError)
 			}
 			task.CancelFunc()
 		}()
@@ -180,23 +180,23 @@ func (m *TaskManager) StartTask(task *BackgroundTask, llmClient *llm.Client) {
 
 		var finalText string
 		_, err := RunWithContext(ctx, llmClient, cfg, func(ev Event) {
-			task.addEvent(ev)
+			task.AddEvent(ev)
 			if ev.Tag == EventAssistantDelta && ev.Delta != "" {
 				finalText += ev.Delta
 			}
 			if ev.Tag == EventDone {
-				task.setFinalText(finalText)
-				task.setStatus(TaskStatusCompleted)
+				task.SetFinalText(finalText)
+				task.SetStatus(TaskStatusCompleted)
 			}
 			if ev.Tag == EventError && ev.Error != "" {
-				task.setError(ev.Error)
-				task.setStatus(TaskStatusError)
+				task.SetError(ev.Error)
+				task.SetStatus(TaskStatusError)
 			}
 		})
 
-		if err != nil && task.getStatus() == TaskStatusRunning {
-			task.setError(err.Error())
-			task.setStatus(TaskStatusError)
+		if err != nil && task.GetStatus() == TaskStatusRunning {
+			task.SetError(err.Error())
+			task.SetStatus(TaskStatusError)
 		}
 	}()
 }
@@ -211,8 +211,8 @@ func (m *TaskManager) StopTask(id string) bool {
 	if task.CancelFunc != nil {
 		task.CancelFunc()
 	}
-	task.setStatus(TaskStatusStopped)
-	task.addEvent(Event{Tag: EventDone, Error: "stopped by user"})
+	task.SetStatus(TaskStatusStopped)
+	task.AddEvent(Event{Tag: EventDone, Error: "stopped by user"})
 	return true
 }
 
@@ -231,13 +231,15 @@ func randomString(n int) string {
 }
 
 // RunWithContext is like Run but accepts an externally controlled context.
+// It shares the same agentic loop as Run but will bail immediately when the
+// context is cancelled (used by background tasks so Stop works).
 func RunWithContext(ctx context.Context, llmClient *llm.Client, cfg RunConfig, onEvent func(Event)) (string, error) {
 	if llmClient == nil {
 		return "", fmt.Errorf("llm client required")
 	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds <= 0 {
-		maxRounds = 20
+		maxRounds = 50
 	}
 	system := cfg.System
 	if system == "" {
@@ -269,25 +271,16 @@ func RunWithContext(ctx context.Context, llmClient *llm.Client, cfg RunConfig, o
 			Messages: msgs,
 		}
 
-		streamErr := llmClient.StreamChat(ctx, req, func(d llm.Delta) {
+		// Use the shared retry-aware streamer for robustness on transient errors.
+		streamErr := streamWithRetry(ctx, llmClient, req, round, func(d llm.Delta) {
 			if d.Delta != "" {
 				acc.WriteString(d.Delta)
 				safeEmit(onEvent, Event{Tag: EventAssistantDelta, Round: round, Delta: d.Delta})
 			}
-		})
+		}, onEvent)
 		if streamErr != nil {
-			if strings.Contains(strings.ToLower(streamErr.Error()), "streaming not supported") {
-				resp, err := llmClient.Chat(ctx, req)
-				if err != nil {
-					safeEmit(onEvent, Event{Tag: EventError, Error: err.Error(), Round: round})
-					return finalText.String(), err
-				}
-				acc.WriteString(resp.Content)
-				safeEmit(onEvent, Event{Tag: EventAssistantDelta, Round: round, Delta: resp.Content})
-			} else {
-				safeEmit(onEvent, Event{Tag: EventError, Error: streamErr.Error(), Round: round})
-				return finalText.String(), streamErr
-			}
+			// streamWithRetry already emitted an EventError; bail out.
+			return finalText.String(), streamErr
 		}
 
 		assistantText := acc.String()
@@ -297,6 +290,28 @@ func RunWithContext(ctx context.Context, llmClient *llm.Client, cfg RunConfig, o
 
 		calls := parseToolCalls(assistantText)
 		if len(calls) == 0 {
+			// No parseable tool calls. If the model emitted a tool_call block
+			// but it was malformed, give feedback so it can self-correct
+			// instead of ending the loop prematurely.
+			if hasToolCallBlock(assistantText) {
+				safeEmit(onEvent, Event{Tag: EventToolRequest, Round: round, Tool: &ToolCall{
+					ID:   fmt.Sprintf("r%d-tmalformed", round),
+					Name: "malformed_tool_call",
+				}})
+				tr := ToolResult{
+					ID:     fmt.Sprintf("r%d-tmalformed", round),
+					Name:   "malformed_tool_call",
+					OK:     false,
+					Output: "Your tool_call block was detected but the JSON was malformed or missing a 'name'. Emit ONE tool_call block with valid JSON: {\"name\":\"<tool>\",\"args\":{...}}",
+				}
+				safeEmit(onEvent, Event{Tag: EventToolResult, Round: round, Result: &tr})
+				msgs = append(msgs, llm.Message{
+					Role:    "user",
+					Content: "Your previous tool_call block was malformed or had no 'name'. Re-emit a valid tool_call block in the exact format:\n```tool_call\n{\"name\":\"read\",\"args\":{\"path\":\"src/app.js\"}}\n```\nContinue the task.",
+				})
+				continue
+			}
+			// Genuinely done — no tool blocks at all.
 			safeEmit(onEvent, Event{Tag: EventDone, Round: round})
 			return finalText.String(), nil
 		}

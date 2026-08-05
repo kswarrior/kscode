@@ -39,6 +39,10 @@ func NewService(root string) (*Service, error) {
 
 func (s *Service) Root() string { return s.root }
 
+func (s *Service) Resolve(p string) (string, error) {
+	return s.resolve(p)
+}
+
 func (s *Service) resolve(p string) (string, error) {
 	if p == "" || p == "/" || p == "." {
 		return s.root, nil
@@ -113,6 +117,10 @@ func readDirNames(dir string) ([]string, error) {
 		filtered = append(filtered, n)
 	}
 	return filtered, nil
+}
+
+func (s *Service) Rel(full string) string {
+	return s.rel(full)
 }
 
 func (s *Service) rel(full string) string {

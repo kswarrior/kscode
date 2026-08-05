@@ -68,6 +68,14 @@ export interface ShellStartResponse {
   cwd: string;
 }
 
+export interface ShellSession {
+  id: string;
+  name: string;
+  cwd: string;
+  pid: number;
+  alive: boolean;
+}
+
 export interface ChatRequest {
   provider: string;
   model: string;
