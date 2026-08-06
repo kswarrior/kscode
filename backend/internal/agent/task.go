@@ -239,7 +239,11 @@ func RunWithContext(ctx context.Context, llmClient *llm.Client, cfg RunConfig, o
 	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds <= 0 {
-		maxRounds = 50
+		// Effectively unbounded: the agent must only stop when the task is
+		// genuinely complete or the user cancels. A small round cap would
+		// silently truncate long tasks. 100k rounds at ~1 tool each is more
+		// than any realistic session and still bounds pathological loops.
+		maxRounds = 100000
 	}
 	system := cfg.System
 	if system == "" {
@@ -253,6 +257,11 @@ func RunWithContext(ctx context.Context, llmClient *llm.Client, cfg RunConfig, o
 	msgs = append(msgs, cfg.Messages...)
 
 	var finalText strings.Builder
+
+	// consecutiveMalformed counts back-to-back rounds where the model
+	// emitted a tool_call-shaped block that failed to parse. After a few,
+	// we escalate the correction. Resets the moment a round succeeds.
+	consecutiveMalformed := 0
 
 	for round := 1; round <= maxRounds; round++ {
 		select {
@@ -294,6 +303,7 @@ func RunWithContext(ctx context.Context, llmClient *llm.Client, cfg RunConfig, o
 			// but it was malformed, give feedback so it can self-correct
 			// instead of ending the loop prematurely.
 			if hasToolCallBlock(assistantText) {
+				consecutiveMalformed++
 				safeEmit(onEvent, Event{Tag: EventToolRequest, Round: round, Tool: &ToolCall{
 					ID:   fmt.Sprintf("r%d-tmalformed", round),
 					Name: "malformed_tool_call",
@@ -305,15 +315,47 @@ func RunWithContext(ctx context.Context, llmClient *llm.Client, cfg RunConfig, o
 					Output: "Your tool_call block was detected but the JSON was malformed or missing a 'name'. Emit ONE tool_call block with valid JSON: {\"name\":\"<tool>\",\"args\":{...}}",
 				}
 				safeEmit(onEvent, Event{Tag: EventToolResult, Round: round, Result: &tr})
+				nudge := "Your previous tool_call block was malformed or had no 'name'. Re-emit a valid tool_call block in the exact format:\n```tool_call\n{\"name\":\"read\",\"args\":{\"path\":\"src/app.js\"}}\n```\nContinue the task."
+				if consecutiveMalformed >= 4 {
+					nudge = "Your tool_call blocks keep failing to parse. STOP and CAREFULLY follow this EXACT shape — double-quoted keys, no trailing commas, no extra text inside the block, args MUST be a JSON object:\n```tool_call\n{\"name\":\"ls\",\"args\":{\"path\":\".\"}}\n```\nNow pick ONE concrete next step for the task and emit exactly one such block. If the task is already complete, reply with a one-sentence prose summary and no code blocks."
+				}
+				if consecutiveMalformed >= 8 {
+					nudge = "You have repeatedly produced unparseable tool calls. To make progress right now WITHOUT any tools, write a short prose summary of what you have already done and what remains. Do NOT emit any code block. Just prose."
+				}
 				msgs = append(msgs, llm.Message{
 					Role:    "user",
-					Content: "Your previous tool_call block was malformed or had no 'name'. Re-emit a valid tool_call block in the exact format:\n```tool_call\n{\"name\":\"read\",\"args\":{\"path\":\"src/app.js\"}}\n```\nContinue the task.",
+					Content: nudge,
 				})
 				continue
 			}
-			// Genuinely done — no tool blocks at all.
-			safeEmit(onEvent, Event{Tag: EventDone, Round: round})
-			return finalText.String(), nil
+			// A successful round (no malformed block) resets the counter.
+			consecutiveMalformed = 0
+			// The model emitted no tool blocks. If it pasted finished code
+			// in a ```lang fence instead of writing files via tools, nudging
+			// it (on early rounds) keeps the task from stalling. Weak models
+			// that don't understand the protocol often do this.
+		if round < maxRounds && hasNonToolFencedCode(assistantText) {
+			msgs = append(msgs, llm.Message{
+				Role: "user",
+				Content: "You pasted code in the chat without running it. Code in the chat does NOT execute — only a ```tool_call block does. To apply that code, use the `write` or `edit` tool:\n\n```tool_call\n{\"name\":\"write\",\"args\":{\"path\":\"<file>\",\"content\":\"<the code you just wrote>\"}}\n```\nIf the task is actually already complete and verified, reply with ONLY a short prose summary and no code blocks.",
+			})
+			continue
+		}
+		// A trivial bare-prose reply (no tool call, no code, very short)
+		// on an early round usually means the model just echoed the user
+		// (e.g. saying "hi" back) instead of acting. Nudge it once so the
+		// agent either states a concrete plan + calls a tool, or gives a
+		// genuinely useful answer rather than mirroring the greeting.
+		if round < maxRounds && isTrivialReply(assistantText) {
+			msgs = append(msgs, llm.Message{
+				Role: "user",
+				Content: "That reply did not make any progress on the task. Either: (1) if there is real work to do, briefly state your plan in one sentence then emit ONE ```tool_call block to start (e.g. `ls {\"path\":\".\"}` or `read`), or (2) if the user's message is just a greeting / conversational with no coding task, reply with ONE short prose sentence that actually helps them (e.g. ask what they'd like to build or which file to work on). Do not simply echo the user's words.",
+			})
+			continue
+		}
+		// Genuinely done — no tool blocks at all.
+		safeEmit(onEvent, Event{Tag: EventDone, Round: round})
+		return finalText.String(), nil
 		}
 
 		var resultBlock strings.Builder

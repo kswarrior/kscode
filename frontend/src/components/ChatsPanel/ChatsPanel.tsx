@@ -1,7 +1,7 @@
 import type { Project } from "../../types";
 import { useChats } from "../../hooks/useChats";
 import { ChatPanel } from "../Chat/ChatPanel";
-import { IconChat, IconClose, IconFolderOpen } from "../Icon";
+import { IconClose, IconFolderOpen } from "../Icon";
 import "./ChatsPanel.css";
 
 interface Props {
@@ -16,10 +16,32 @@ interface Props {
 export function ChatsPanel({ project, chatsApi }: Props) {
   const { activeChat, back } = chatsApi;
 
+  // When a project is active but no chat is selected, render the chat
+  // composer directly (with an input box) instead of the "No chat selected"
+  // empty state. The user's first prompt auto-creates a chat (see
+  // useChats.ensureChat / ChatPanel.send) which then appears in the sidebar.
+  if (!project) {
+    return (
+      <div className="chats-panel">
+        <div className="chats-conversation">
+          <div className="chats-conversation-body">
+            <div className="chats-empty-state">
+              <div className="chats-empty-icon"><IconFolderOpen size={28} /></div>
+              <p className="chats-empty-title">No project selected</p>
+              <p className="chats-empty-sub">
+                Select a project from the header dropdown, then pick a chat from the sidebar.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="chats-panel">
-      {activeChat && project ? (
-        <div className="chats-conversation">
+      <div className="chats-conversation">
+        {activeChat && (
           <div className="chats-conversation-head">
             <button
               className="chats-convo-back icon-btn"
@@ -31,28 +53,15 @@ export function ChatsPanel({ project, chatsApi }: Props) {
             </button>
             <span className="chats-convo-title" title={activeChat.title}>{activeChat.title || "Untitled"}</span>
           </div>
-          <div className="chats-conversation-body">
-            <ChatPanel
-              project={{ id: project.id, name: project.name, path: project.path }}
-              chat={activeChat}
-            />
-          </div>
+        )}
+        <div className="chats-conversation-body">
+          <ChatPanel
+            project={{ id: project.id, name: project.name, path: project.path }}
+            chat={activeChat ?? undefined}
+            chatsApi={chatsApi}
+          />
         </div>
-      ) : (
-        <div className="chats-conversation">
-          <div className="chats-conversation-body">
-            <div className="chats-empty-state">
-              <div className="chats-empty-icon">{project ? <IconChat size={28} /> : <IconFolderOpen size={28} />}</div>
-              <p className="chats-empty-title">{project ? "No chat selected" : "No project selected"}</p>
-              <p className="chats-empty-sub">
-                {project
-                  ? "Pick a chat from the sidebar, or start a new one."
-                  : "Select a project from the header dropdown, then pick a chat from the sidebar."}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

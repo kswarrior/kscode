@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
+import { useChats } from "../../hooks/useChats";
 import { useSettings } from "../../hooks/useSettings";
-import type { AgentEvent, AgentRunRequest, Provider } from "../../types";
+import type { AgentEvent, AgentRunRequest, ChatMessage, ChatMessageTool, Provider } from "../../types";
 import {
   IconChevronDown,
   IconSearch,
@@ -34,19 +35,223 @@ interface Msg {
 const SEP = "|";
 
 // Strip tool-call markers from assistant text before rendering as markdown.
-// Handles three forms the model might emit:
+// Handles weak-model variants in addition to the canonical ```tool_call fence:
 //   1. ```tool_call\n{json}\n```          (canonical fenced block)
-//   2. {tool_call}{json}                  (inline opener without closing)
-//   3. bare `{tool_call}` markers with no body
-// Also strip any leaked JSON objects that contain "name" + "args" keys
-// near a `{tool_call}` marker.
+//   2. ```json\n{name:..,args:..}\n```     (weak model that uses ```json)
+//   3. ```\n{json}\n``` or ```tool\n..```  (bare/other-typed fence with tool JSON)
+//   4. {tool_call}{json}{tool_call}        (inline opener)
+//   5. bare `{tool_call}` markers
+//   6. a bare JSON line {"name":"..","args":{..}}  (no fence at all)
 const toolBlockRe = /```tool_call\s*\n[\s\S]*?\n```/g;
+const genericFencedRe = /```[a-zA-Z0-9_+-]*\s*\n[\s\S]*?\n```/g;
 const inlineToolCallRe = /\{tool_call\}\s*\{[\s\S]*?\}\s*\{tool_call\}/g;
 const bareToolCallRe = /\{tool_call\}/g;
+// Heuristic to detect a tool-call-shaped JSON blob's name key without a full
+// parse: matches "name"|"tool"|"function" : "..." . Used by the bare-blob scan.
+const bareToolNameRe = /"\s*(name|tool|function)"\s*:\s*"[^"]+"/;
+// Kept for backwards compat with older persisted blobs that used the strict
+// single-line shape; superseded by findBareToolJSON below.
+const bareJSONToolRe = /^\s*\{"\s*(name|tool)"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{[\s\S]*?\}\s*\}\s*$/gm;
+
+// Brace/quote-aware scan that locates a complete {...} JSON object starting at
+// index i. Handles nested objects/arrays AND escaped string contents (so a
+// "content" arg containing "{" or "}" is not mistaken for JSON structure).
+// Returns the full blob substring, or "" if none / unbalanced.
+function findBareToolJSON(text: string, i: number): string {
+  const n = text.length;
+  while (i < n && text[i] !== "{") i++;
+  if (i >= n) return "";
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  const start = i;
+  for (; i < n; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    switch (c) {
+      case '"':
+        inStr = true;
+        break;
+      case "{":
+      case "[":
+        depth++;
+        break;
+      case "}":
+      case "]":
+        depth--;
+        if (c === "}" && depth === 0) return text.slice(start, i + 1);
+        if (depth < 0) return "";
+        break;
+    }
+  }
+  return "";
+}
+
+// Does a code-fence body (or bare blob) look like a tool call (name + args)?
+// Mirrors backend. Two checks in order:
+//   1. Strict JSON.parse — the common, well-formed case.
+//   2. Lenient structural scan — handles "tool JSON" the model printed with
+//      RAW control characters inside string values (literal newlines,
+//      unescaped quotes inside content, etc.): the model frequently streams
+//      multi-line file content with real \n instead of escaped \\n. Strict
+//      JSON.parse rejects those, which caused the frontend to NOT recognize
+//      the blob as a tool, leaving the raw JSON (and the quoted EJS content)
+//      rendered as plain chat text — while the backend, which only needs the
+//      name/path to execute the write, still created the file just fine.
+//      The lenient path re-escapes obvious offenders and retries, and as a
+//      last resort checks for the structural key shape so the span is still
+//      paired with a tool card and stripped from the prose.
+function fenceLooksLikeTool(body: string): boolean {
+  if (looksLikeToolStrict(body)) return true;
+  return looksLikeToolLenient(body);
+}
+
+function looksLikeToolStrict(body: string): boolean {
+  try {
+    const o = JSON.parse(body);
+    return !!o && (typeof o === "object") && (!!o.name || !!o.tool || !!o.function);
+  } catch {
+    return false;
+  }
+}
+
+// Lenient: even if the JSON won't parse (raw newlines in strings), recognize
+// the shape {"(name|tool|function)":"...","args":{...}} . We scan with the
+// brace-aware scanner so string contents don't fool us, and accept the blob
+// if it has a (name|tool|function) key with a string value alongside any
+// args/arguments/parameters/input key.
+function looksLikeToolLenient(body: string): boolean {
+  const s = body.trim();
+  if (s[0] !== "{" || s[s.length - 1] !== "}") return false;
+  let i = 0;
+  const n = s.length;
+  // skip leading {
+  const next = (ch: string): RegExpMatchArray | null => {
+    while (i < n && /\s/.test(s[i])) i++;
+    if (s[i] !== ch) return null;
+    i++;
+    while (i < n && /\s/.test(s[i])) i++;
+    return [""];
+  };
+  // Read a JSON string key (lenient: stops at unescaped closing quote).
+  const readKey = (): string | null => {
+    while (i < n && s[i] !== '"') i++;
+    if (i >= n) return null;
+    i++; // open quote
+    let k = "";
+    while (i < n) {
+      if (s[i] === "\\") { k += s[i + 1] ?? ""; i += 2; continue; }
+      if (s[i] === '"') { i++; break; }
+      k += s[i++];
+    }
+    return k;
+  };
+  if (!next("{")) return false;
+  let hasName = false, hasArgs = false;
+  for (let pairs = 0; pairs < 50; pairs++) {
+    const k = readKey();
+    if (k === null) break;
+    while (i < n && s[i] !== ":") i++;
+    i++; // colon
+    while (i < n && /\s/.test(s[i])) i++;
+    // value: string, object, array, number, bool, null
+    const vc = s[i];
+    if (vc === '"') {
+      // is it a name/tool/function key with a non-empty string value?
+      let j = i + 1, v = "";
+      while (j < n) {
+        if (s[j] === "\\") { v += s[j + 1] ?? ""; j += 2; continue; }
+        if (s[j] === '"') { j++; break; }
+        v += s[j++];
+      }
+      if ((k === "name" || k === "tool" || k === "function") && v.length > 0) hasName = true;
+      i = j;
+    } else if (vc === "{" || vc === "[") {
+      // skip a whole nested object/array using the brace scanner on the
+      // remaining substring.
+      const blob = findBareToolJSON(s, i);
+      if (!blob) return false;
+      if ((k === "args" || k === "arguments" || k === "parameters" || k === "input")) hasArgs = true;
+      i += blob.length;
+    } else {
+      // number / true / false / null — skip token
+      while (i < n && /[^\s,}\]]/.test(s[i])) i++;
+    }
+    // skip trailing comma / whitespace
+    while (i < n && /[\s,]/.test(s[i])) i++;
+    if (s[i] === "}") break;
+  }
+  return hasName && hasArgs;
+}
+
+// Returns all [start, end] spans of text that are tool-call markers (any form),
+// in the order they appear. Used by both stripToolBlocks and splitSegments.
+function toolSpans(text: string): [number, number][] {
+  const spans: [number, number][] = [];
+  const push = (s: number, e: number) => { if (e > s) spans.push([s, e]); };
+  let m: RegExpExecArray | null;
+
+  const toolRe = new RegExp(toolBlockRe.source, "g");
+  while ((m = toolRe.exec(text)) !== null) push(m.index, m.index + m[0].length);
+
+  const genRe = new RegExp(genericFencedRe.source, "g");
+  while ((m = genRe.exec(text)) !== null) {
+    const inner = m[0].replace(/^```[a-zA-Z0-9_+-]*\s*\n/, "").replace(/\n```$/, "");
+    if (fenceLooksLikeTool(inner)) push(m.index, m.index + m[0].length);
+  }
+
+  const inlineRe = new RegExp(inlineToolCallRe.source, "g");
+  while ((m = inlineRe.exec(text)) !== null) push(m.index, m.index + m[0].length);
+
+  // Bare inline JSON tool object ANYWHERE (not anchored to a line start) with
+  // arbitrarily nested/multi-line args. A brace-aware scan rescues the common
+  // weak-model case where the call is written mid-sentence or its args span
+  // many lines (e.g. a long file content) — the old ^...$ regex silently
+  // missed those, leaving the raw JSON rendered as text in the chat instead of
+  // being collapsed into a tool card.
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    const blob = findBareToolJSON(text, i);
+    if (!blob) continue;
+    if (!fenceLooksLikeTool(blob)) continue;
+    push(i, i + blob.length);
+    i += blob.length - 1; // skip past interior so we don't re-scan it
+  }
+
+  // Sort FIRST, then drop spans nested inside an earlier (larger) one. The
+  // dedup must run on sorted order — otherwise a fence found at index 95
+  // (inserted before a bare JSON tool at index 22) would make the dedup
+  // compare 22 < 95's-end and wrongly DROP the earlier-positioned tool,
+  // leaking its raw JSON into the prose and desyncing every subsequent card
+  // pairing (the "some cards okay, some merge with markdown" bug).
+  spans.sort((a, b) => a[0] - b[0]);
+  for (let k = 0; k < spans.length; k++) {
+    if (k > 0 && spans[k][0] < spans[k - 1][1]) {
+      spans.splice(k, 1);
+      k--;
+    }
+  }
+  return spans;
+}
+
 function stripToolBlocks(text: string): string {
-  return text
-    .replace(toolBlockRe, "")
-    .replace(inlineToolCallRe, "")
+  // Remove each tool span, then collapse leftover bare `{tool_call}` markers
+  // and excess blank lines.
+  const spans = toolSpans(text);
+  let out = "";
+  let last = 0;
+  for (const [s, e] of spans) {
+    if (s < last) continue; // skip overlapping spans (see splitSegments)
+    out += text.slice(last, s);
+    last = e;
+  }
+  out += text.slice(last);
+  return out
     .replace(bareToolCallRe, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -65,33 +270,33 @@ type Segment =
 // matches the `tools` array we accumulate from tool_request events, so we
 // pair each detected fence/inline marker with the corresponding tool.
 function splitSegments(text: string, tools: ToolEntry[]): Segment[] {
-  // ONE combined regex that matches fenced ```tool_call blocks OR inline
-  // {tool_call}{...}{tool_call} markers, in the order they appear.
-  const re = /```tool_call\s*\n[\s\S]*?\n```/g;
+  // Use the unified tool-span extractor so weak-model formats (```json,
+  // bare JSON) split at the correct position too, not just ```tool_call.
+  const spans = toolSpans(text);
   const segs: Segment[] = [];
   let lastIndex = 0;
   let toolIdx = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    // Prose before this tool block.
-    const prose = text.slice(lastIndex, m.index);
+  for (const [s, e] of spans) {
+    // Skip spans that overlap the region already consumed (e.g. a fenced
+    // ```tool_call block AND its detected inner JSON both produce spans at
+    // overlapping indices). Overlap would pair the same tool twice.
+    if (s < lastIndex) continue;
+    const prose = text.slice(lastIndex, s);
     if (prose.replace(/\s/g, "")) {
       segs.push({ kind: "text", html: renderMarkdown(prose) });
     }
-    // The tool card (paired by position; clamped to available tools).
     if (toolIdx < tools.length) {
       segs.push({ kind: "tool", tool: tools[toolIdx++] });
     }
-    lastIndex = m.index + m[0].length;
+    lastIndex = e;
   }
-  // Trailing prose after the last tool block.
+  // Trailing prose after the last tool block, stripped of leftover markers.
   const tail = text.slice(lastIndex);
-  // Also strip any bare/inline tool_call markers that weren't real blocks.
-  const cleanTail = tail.replace(inlineToolCallRe, "").replace(bareToolCallRe, "");
+  const cleanTail = stripToolBlocks(tail);
   if (cleanTail.replace(/\s/g, "")) {
-    segs.push({ kind: "text", html: renderMarkdown(cleanTail.replace(/\n{3,}/g, "\n\n").trim()) });
+    segs.push({ kind: "text", html: renderMarkdown(cleanTail) });
   }
-  // If no tool blocks were embedded in the text but tools exist (e.g. they
+  // If no tool spans were embedded in the text but tools exist (e.g. they
   // arrived as separate events without a fenced block in the stream), append
   // them at the end so they're still visible inline after the prose.
   while (toolIdx < tools.length) {
@@ -105,13 +310,16 @@ interface ChatPanelProps {
   chat?: {
     id: string;
     title: string;
-    messages?: Msg[];
+    messages?: ChatMessage[];
     provider?: string;
     model?: string;
   };
+  // Set when rendered from ChatsPanel so the composer can auto-create a chat
+  // on the first prompt (instead of forcing the user to click "New chat").
+  chatsApi?: ReturnType<typeof useChats>;
 }
 
-export function ChatPanel({ project, chat }: ChatPanelProps) {
+export function ChatPanel({ project, chat, chatsApi }: ChatPanelProps) {
   const { settings } = useSettings();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -119,7 +327,36 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const providers = settings?.ai.providers ?? [];
   const [providerId, setProviderId] = useState(settings?.ai.defaultProvider ?? "");
-  const [modelKey, setModelKey] = useState<string>("");
+  // Persist the last-selected provider+model so reopening the app / opening a
+  // brand-new chat shows the one you used last, instead of silently reverting
+  // to the provider default. Stored as "<providerId>|<model>" (model may be
+  // empty meaning "provider default, no specific model").
+  const [modelKey, setModelKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem("kscode:lastModelKey") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  // Step tracker: stepsTotal = number of tool_request events seen so far (the
+  // agent's running "plan of N steps"); stepsDone = number of tool_result
+  // events received. Shown next to the Send button as "Steps done/total" so
+  // the user can watch progress even though the steps themselves render as
+  // cards inline in the messages, not in a list.
+  const [stepsTotal, setStepsTotal] = useState(0);
+  const [stepsDone, setStepsDone] = useState(0);
+  // Detailed step history for the expandable steps list. Each entry records
+  // the tool name, short args summary, and result (ok/error) in the order
+  // they were requested. Used when the user clicks the "Steps X/Y" pill to
+  // show a dropdown like "1. write frontend, 2. write backend, 3. verify".
+  const [stepHistory, setStepHistory] = useState<{
+    id: string;
+    name: string;
+    argsSummary: string;
+    ok?: boolean;
+    output?: string;
+  }[]>([]);
+  const [showStepsList, setShowStepsList] = useState(false);
   // Background task ID for reconnection support. Persisted in localStorage.
   const [taskId, setTaskId] = useState<string | null>(() => {
     try {
@@ -133,21 +370,72 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const thinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const prevChatIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    stop();
+    // Don't kill any in-progress background task when SWITCHING chats or on a
+    // page refresh — only tear down the LOCAL SSE stream. A subsequent
+    // reconnect (reconnectToTask) rejoins the still-running task and replays
+    // its buffered events, so refreshes don't lose the assistant output.
+    //
+    // Exception: the user EXPLICITLY navigated to a DIFFERENT chat while an
+    // agent task for the previous chat is still running. In that case the
+    // previous task belongs to a conversation we've left, so stop it on the
+    // server (so it doesn't keep burning tokens in the background) before we
+    // switch. On the very first mount (prevChatIdRef === null) we never stop.
+    if (prevChatIdRef.current !== null && prevChatIdRef.current !== chat?.id) {
+      stop();
+    } else {
+      abortLocal();
+    }
+    prevChatIdRef.current = chat?.id ?? null;
+    setStepHistory([]);
     setError(null);
     if (chat?.messages && chat.messages.length > 0) {
-      setMessages(chat.messages.map((m) => ({ role: m.role, content: m.content })));
+      setMessages(
+        chat.messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          // Restore tool cards so they render again on reopen.
+          tools: (m.tools ?? []).map((t) => ({
+            id: t.id,
+            name: t.name,
+            args: t.args,
+            result: t.result ? { ok: t.result.ok, output: t.result.output } : undefined,
+          })),
+        })),
+      );
     } else {
       setMessages([]);
     }
-    if (chat?.provider) setProviderId(chat.provider);
-    if (chat?.model)
-      setModelKey(chat.provider ? chat.provider + SEP + chat.model : "");
+    if (chat?.provider) {
+      // This chat remembers which provider+model it used — restore that.
+      setProviderId(chat.provider);
+      if (chat?.model) setModelKey(chat.provider + SEP + chat.model);
+    } else {
+      // No chat-specific model: fall back to the last one the user picked,
+      // persisted across sessions in localStorage. If none was ever picked
+      // (first run / cleared), leave modelKey empty so the dropdown shows the
+      // "Select model" placeholder below.
+      try {
+        const last = localStorage.getItem("kscode:lastModelKey") ?? "";
+        setModelKey(last);
+        if (last) {
+          const sepIdx = last.indexOf(SEP);
+          if (sepIdx > -1) setProviderId(last.slice(0, sepIdx));
+        }
+      } catch { /* ignore */ }
+    }
+    // Reset the step counter when switching conversations.
+    setStepsTotal(0);
+    setStepsDone(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat?.id]);
 
   // Reconnection: if there's a saved taskId and we have a chat, reconnect to the background task.
+  // Re-runs when the saved task id changes or when a chat becomes selected
+  // (e.g. restored asynchronously after a page refresh) so we don't miss the
+  // window to rejoin a still-running agent task.
   useEffect(() => {
     if (!taskId || !chat) return;
     // If we already have an active assistant message, the task might still be running.
@@ -157,7 +445,8 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       // No active assistant - we might have missed the stream. Reconnect to get events.
       reconnectToTask();
     }
-  }, []); // Run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, chat?.id]);
 
   const reconnectToTask = async () => {
     if (!taskId || !chat) return;
@@ -196,15 +485,40 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
             }
             break;
           case "tool_request":
-            if (ev.tool) appendTool({ id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
+            if (ev.tool) {
+              appendTool({ id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
+              setStepsTotal((n) => n + 1);
+            }
+            // On reconnect the deltas are replayed, so last.content already
+            // matches ev.text for this round. Resync the local accumulator only.
+            if (ev.text) assistantText = ev.text;
             break;
           case "tool_result":
-            if (ev.result) updateToolResult(ev.result.id, { ok: ev.result.ok, output: ev.result.output });
+            if (ev.result) {
+              updateToolResult(ev.result.id, { ok: ev.result.ok, output: ev.result.output });
+              setStepsDone((n) => n + 1);
+            }
             if (thinkTimerRef.current) {
               clearTimeout(thinkTimerRef.current);
               thinkTimerRef.current = null;
             }
             assistantText = "";
+            // Incrementally persist after each completed tool so a second
+            // refresh (before done) still keeps the partial output + cards.
+            if (chat) {
+              try {
+                setMessages((cur) => {
+                  const last = cur[cur.length - 1];
+                  if (last && last.role === "assistant") {
+                    const tools: ChatMessageTool[] = (last.tools ?? []).map((t) => ({
+                      id: t.id, name: t.name, args: t.args, result: t.result,
+                    }));
+                    void api.chats.upsert(project!.id, chat!.id, last.content, tools);
+                  }
+                  return cur;
+                });
+              } catch { /* ignore */ }
+            }
             patchLastAssistant({ thinking: true });
             break;
           case "done":
@@ -214,7 +528,24 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
             }
             patchLastAssistant({ thinking: false, streaming: false, retrying: null });
             setTaskId(null);
+            setStepHistory([]);
             try { localStorage.removeItem("kscode:agentTaskId"); } catch { /* ignore */ }
+            // Persist the completed turn in case the original send's finally
+            // didn't run (e.g. page reloaded mid-task). Idempotent upsert.
+            if (chat) {
+              try {
+                setMessages((cur) => {
+                  const last = cur[cur.length - 1];
+                  if (last && last.role === "assistant") {
+                    const tools: ChatMessageTool[] = (last.tools ?? []).map((t) => ({
+                      id: t.id, name: t.name, args: t.args, result: t.result,
+                    }));
+                    void api.chats.upsert(project!.id, chat!.id, last.content, tools);
+                  }
+                  return cur;
+                });
+              } catch { /* ignore */ }
+            }
             break;
           case "retry":
             if (ev.attempt !== undefined && ev.delayMs !== undefined) {
@@ -276,16 +607,22 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
   const modelsFor = (p: Provider): string[] => p.models ?? [];
 
   const triggerLabel = useMemo(() => {
+    // If the user has never picked a model in this chat (and there's no
+    // persisted last-pick), prompt them to choose instead of silently showing
+    // the provider's default model name.
+    if (!effModel && !modelKey) return "Select model";
     if (!parsed.p) return "No provider";
     let label = parsed.p.name || parsed.p.id;
     if (parsed.model) label = parsed.model;
     return label;
-  }, [parsed]);
+  }, [parsed, effModel, modelKey]);
 
   const stop = async () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    // Also stop the background task on the server.
+    abortLocal();
+    // Also stop the background task on the server (only used by the Stop
+    // button). Switching conversations / reloading must NOT call this — see
+    // abortLocal() — because killing an in-progress background task on a
+    // plain page refresh would discard the in-flight assistant output.
     if (taskId) {
       try {
         await api.agent.stop(taskId);
@@ -295,6 +632,16 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       setTaskId(null);
       try { localStorage.removeItem("kscode:agentTaskId"); } catch { /* ignore */ }
     }
+  };
+
+  // abortLocal tears down only the LOCAL SSE connection to the background
+  // task, without telling the server to kill the task. Used when switching
+  // chats (or when the component is re-mounting on a page refresh): the task
+  // keeps running server-side, the new mount reconnects to it via the saved
+  // taskId and replays buffered events, so nothing visible is lost.
+  const abortLocal = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
   };
 
   // Ensure the last message is an assistant placeholder so thinking deltas can accumulate.
@@ -345,9 +692,26 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
   const send = async () => {
     if (!input.trim() || busy) return;
     const pId = effProviderId;
-    if (!pId) {
+    if (!pId || !effModel) {
       setError("Pick a model below.");
       return;
+    }
+    // Start this prompt's step counter at zero (the steps live on the
+    // trailing assistant message, not across messages).
+    setStepsTotal(0);
+    setStepsDone(0);
+    setStepHistory([]);
+    // If no chat is selected (composer opened from "no chat selected" view),
+    // auto-create one now so the first prompt materializes a chat that shows
+    // up in the sidebar list immediately.
+    let currentChat = chat;
+    if (!currentChat && chatsApi && project) {
+      const created = await chatsApi.ensureChat();
+      if (!created) {
+        setError("Could not create a chat.");
+        return;
+      }
+      currentChat = created;
     }
     const userText = input.trim();
     const userMsg: Msg = { role: "user", content: userText };
@@ -388,41 +752,40 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
       maxRounds: 50,
     };
 
-    if (chat) {
+    if (currentChat) {
       try {
-        await api.chats.append(project!.id, chat.id, "user", userText);
+        await api.chats.append(project!.id, currentChat.id, "user", userText);
       } catch {
         /* best-effort persistence */
       }
     }
 
-    let lastPersist = 0;
-    const persistInterval = 800; // ms between incremental saves
-    const persistAssistant = async (text: string, streaming = true) => {
-      if (!chat) return;
+    // Persist the assistant turn ONCE at the end (idempotent upsert that
+    // replaces the trailing assistant message instead of appending). We do
+    // NOT save during streaming — that used to append a new assistant row on
+    // every chunk, which caused the assistant text to show up multiple times
+    // when the chat was reopened. The upsert is called once in the finally
+    // block with the final content + tool cards.
+    const persistTurn = async () => {
+      if (!currentChat) return;
       try {
-        // Only persist periodically to avoid flooding the API
-        const now = Date.now();
-        if (!streaming || now - lastPersist >= persistInterval) {
-          lastPersist = now;
-          await api.chats.append(project!.id, chat.id, "assistant", text);
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    // Persist the full assistant message (content + tools) to chat history.
-    const persistFullAssistant = async () => {
-      if (!chat) return;
-      try {
-        setMessages((cur) => {
-          const last = cur[cur.length - 1];
-          if (last && last.role === "assistant") {
-            // Fire-and-forget: we don't await this
-            api.chats.append(project!.id, chat.id, "assistant", last.content);
-          }
-          return cur;
-        });
+        // Read the last assistant message's content + tools from state
+        // via a Promise that resolves after the state flush.
+        const last = await new Promise<Msg | null>((resolve) =>
+          setMessages((cur) => {
+            const m = cur[cur.length - 1];
+            resolve(m && m.role === "assistant" ? m : null);
+            return cur;
+          }),
+        );
+        if (!last) return;
+        const tools: ChatMessageTool[] = (last.tools ?? []).map((t) => ({
+          id: t.id,
+          name: t.name,
+          args: t.args,
+          result: t.result,
+        }));
+        await api.chats.upsert(project!.id, currentChat.id, last.content, tools);
       } catch {
         /* ignore */
       }
@@ -462,7 +825,6 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
               }
               return copy;
             });
-            persistAssistant(assistantText, true);
             if (thinkTimerRef.current === null) {
               thinkTimerRef.current = setTimeout(() => {
                 thinkTimerRef.current = null;
@@ -471,16 +833,59 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
             }
             break;
           case "tool_request":
-            if (ev.tool) appendTool({ id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
+            if (ev.tool) {
+              const toolId = ev.tool.id;
+              const name = ev.tool.name;
+              const args = ev.tool.args ?? {};
+              // Build a concise args summary for the steps list.
+              const argsSummary = (() => {
+                try {
+                  const a = args;
+                  if (Array.isArray(a.edits) && a.path) {
+                    return `${a.path} (${a.edits.length} edit${a.edits.length === 1 ? "" : "s"})`;
+                  }
+                  if (name === "patch") {
+                    const p = typeof a.patch === "string" ? a.patch : "";
+                    const fileMatch = p.match(/^\+\+\+ b\/([^\s]+)/m);
+                    return fileMatch ? `=> ${fileMatch[1]}` : "unified diff";
+                  }
+                  const keys = Object.keys(a);
+                  const preferred = ["command", "path", "pattern", "from", "content", "old_string"];
+                  for (const k of preferred) {
+                    if (a[k] !== undefined) {
+                      let v = String(a[k]);
+                      if (v.length > 60) v = v.slice(0, 60) + "…";
+                      return k === "command" ? v : k === "old_string" ? `→ ${a.path ?? ""}: ${v}` : `${k}: ${v}`;
+                    }
+                  }
+                  if (keys.length) return JSON.stringify(a).slice(0, 60);
+                  return "";
+                } catch {
+                  return "";
+                }
+              })();
+              appendTool({ id: toolId, name, args });
+              setStepsTotal((n) => n + 1);
+              setStepHistory((prev) => [...prev, { id: toolId, name, argsSummary, ok: undefined, output: undefined }]);
+            }
+            if (ev.text) assistantText = ev.text;
             break;
           case "tool_result":
-            if (ev.result) updateToolResult(ev.result.id, { ok: ev.result.ok, output: ev.result.output });
+            if (ev.result) {
+              updateToolResult(ev.result.id, { ok: ev.result.ok, output: ev.result.output });
+              setStepsDone((n) => n + 1);
+              setStepHistory((prev) => prev.map((s) => s.id === ev.result!.id ? { ...s, ok: ev.result!.ok, output: ev.result!.output } : s));
+            }
             if (thinkTimerRef.current) {
               clearTimeout(thinkTimerRef.current);
               thinkTimerRef.current = null;
             }
-            persistFullAssistant();
             assistantText = "";
+            // Incrementally persist the assistant turn (so far) after every
+            // completed tool. This way a page refresh MID-RUN still shows the
+            // partial progress + cards from the saved chat, not just the user
+            // message; the reconnect also fills in anything missing live.
+            if (currentChat) void persistTurn();
             patchLastAssistant({ thinking: true });
             break;
           case "done":
@@ -491,6 +896,8 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
             patchLastAssistant({ thinking: false, streaming: false, retrying: null });
             // Task completed - clear the saved task ID so next prompt starts fresh
             setTaskId(null);
+            setStepHistory([]);
+            if (currentChat) void persistTurn();
             try { localStorage.removeItem("kscode:agentTaskId"); } catch { /* ignore */ }
             break;
           case "retry":
@@ -530,23 +937,26 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
         clearTimeout(thinkTimerRef.current);
         thinkTimerRef.current = null;
       }
-      // Finalize the assistant turn and persist the full text.
-      let finalAssistant = "";
+      // Finalize the assistant turn (no longer streaming / thinking).
       setMessages((cur) => {
         const copy = [...cur];
         const last = copy[copy.length - 1];
         if (last && last.role === "assistant") {
-          finalAssistant = last.content || "(empty response)";
-          copy[copy.length - 1] = { ...last, content: finalAssistant, thinking: false, streaming: false };
+          const content = last.content || "(empty response)";
+          copy[copy.length - 1] = { ...last, content, thinking: false, streaming: false };
         }
         return copy;
       });
       setBusy(false);
       abortRef.current = null;
 
-      if (chat && finalAssistant) {
-        await persistAssistant(finalAssistant, false);
-        try { await api.chats.meta(project!.id, chat.id, pId, effModel); } catch { /* ignore */ }
+      // Persist the assistant turn ONCE (idempotent upsert replaces the
+      // trailing assistant message instead of appending a duplicate row
+      // for every streamed chunk). Also carries the tool cards so they
+      // render again when the chat is reopened.
+      if (currentChat) {
+        await persistTurn();
+        try { await api.chats.meta(project!.id, currentChat.id, pId, effModel); } catch { /* ignore */ }
       }
     }
   };
@@ -642,23 +1052,87 @@ export function ChatPanel({ project, chat }: ChatPanelProps) {
             selectedModel={effModel}
             triggerLabel={triggerLabel}
             onPick={(pid, modelName) => {
+              const key = modelName ? pid + SEP + modelName : "";
               setProviderId(pid);
-              setModelKey(modelName ? pid + SEP + modelName : "");
+              setModelKey(key);
+              try { localStorage.setItem("kscode:lastModelKey", key); } catch { /* ignore */ }
             }}
           />
           {busy ? (
-            <button className="btn chat-send chat-stop" onClick={stop} title="Stop">
-              <IconStop size={16} />
-            </button>
+            <div className="chat-send-right">
+              {(stepsTotal > 0 || stepsDone > 0) && (
+                <div className="steps-dropdown">
+                  <span
+                    className={showStepsList ? "steps-pill steps-pill-open" : "steps-pill"}
+                    title="Tool calls completed / total"
+                    onClick={() => setShowStepsList((v) => !v)}
+                    onBlur={() => setShowStepsList(false)}
+                  >
+                    Steps {stepsDone}/{stepsTotal}
+                    <IconChevronDown size={10} className={showStepsList ? "steps-chevron-open" : ""} />
+                  </span>
+                  {showStepsList && stepHistory.length > 0 && (
+                    <div className="steps-dropdown-menu" role="menu">
+                      {stepHistory.map((s, i) => (
+                        <div key={s.id} className="steps-dropdown-item" role="menuitem">
+                          <span className="steps-dd-num">{i + 1}.</span>
+                          <span className="steps-dd-name">{s.name}</span>
+                          {s.argsSummary && <span className="steps-dd-args">{s.argsSummary}</span>}
+                          {s.ok !== undefined && (
+                            <span className={"steps-dd-status " + (s.ok ? "ok" : "err")}>
+                              {s.ok ? "✓" : "✗"}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <button className="btn chat-send chat-stop" onClick={stop} title="Stop">
+                <IconStop size={14} />
+              </button>
+            </div>
           ) : (
-            <button
-              className="btn btn-primary chat-send"
-              onClick={send}
-              disabled={!input.trim()}
-              title="Send"
-            >
-              <IconSend size={16} />
-            </button>
+            <div className="chat-send-right">
+              {(stepsTotal > 0 || stepsDone > 0) && (
+                <div className="steps-dropdown">
+                  <span
+                    className={showStepsList ? "steps-pill steps-pill-open" : "steps-pill"}
+                    title="Tool calls completed / total"
+                    onClick={() => setShowStepsList((v) => !v)}
+                    onBlur={() => setShowStepsList(false)}
+                  >
+                    Steps {stepsDone}/{stepsTotal}
+                    <IconChevronDown size={10} className={showStepsList ? "steps-chevron-open" : ""} />
+                  </span>
+                  {showStepsList && stepHistory.length > 0 && (
+                    <div className="steps-dropdown-menu" role="menu">
+                      {stepHistory.map((s, i) => (
+                        <div key={s.id} className="steps-dropdown-item" role="menuitem">
+                          <span className="steps-dd-num">{i + 1}.</span>
+                          <span className="steps-dd-name">{s.name}</span>
+                          {s.argsSummary && <span className="steps-dd-args">{s.argsSummary}</span>}
+                          {s.ok !== undefined && (
+                            <span className={"steps-dd-status " + (s.ok ? "ok" : "err")}>
+                              {s.ok ? "✓" : "✗"}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <button
+                className="btn btn-primary chat-send"
+                onClick={send}
+                disabled={!input.trim() || !effModel}
+                title="Send"
+              >
+                <IconSend size={14} />
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -685,6 +1159,7 @@ function ModelPicker({
   triggerLabel: string;
   onPick: (providerId: string, model: string) => void;
 }) {
+  const empty = !selectedModel && !selectedProviderId;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -712,7 +1187,7 @@ function ModelPicker({
     <div className={open ? "mp mp-open" : "mp"} ref={wrapRef}>
       <button
         type="button"
-        className="mp-trigger"
+        className={"mp-trigger" + (empty ? " mp-trigger-empty" : "")}
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}

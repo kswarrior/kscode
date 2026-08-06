@@ -20,10 +20,23 @@ export function useTerminals(project: Project | null) {
   const [renaming, setRenaming] = useState<ShellSession | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
+  // Ref to the active terminal panel's clear function
+  const clearTermRef = useRef<(() => void) | null>(null);
+
   // Keep a ref of the latest activeId so reload() can read it without being
   // re-created on every selection change (avoids stale-closure bugs).
   const activeIdRef = useRef<string | null>(null);
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
+  const setClearTermRef = useCallback((fn: (() => void) | null) => {
+    clearTermRef.current = fn;
+  }, []);
+
+  const clearTerminal = useCallback(async (id: string) => {
+    if (clearTermRef.current) {
+      clearTermRef.current();
+    }
+  }, []);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -96,6 +109,21 @@ export function useTerminals(project: Project | null) {
     }
   };
 
+  const stopTerminal = async (id: string) => {
+    const t = terminals.find(x => x.id === id);
+    if (!t) return;
+    try {
+      await api.shell.stop(id);
+      if (activeId === id) {
+        setActiveId(null);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+      await reload();
+    } catch (e: any) {
+      alert(e?.message ?? String(e));
+    }
+  };
+
   const startRename = (t: ShellSession) => {
     setRenaming(t);
     setRenameValue(t.name || "");
@@ -136,6 +164,9 @@ export function useTerminals(project: Project | null) {
     newTerminal,
     handleOpen,
     removeTerminal,
+    stopTerminal,
+    clearTerminal,
+    setClearTermRef,
     startRename,
     commitRename,
     back,

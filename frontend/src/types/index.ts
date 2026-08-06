@@ -98,9 +98,22 @@ export interface Project {
   createdAt: string;
 }
 
+export interface ChatMessageToolResult {
+  ok: boolean;
+  output: string;
+}
+
+export interface ChatMessageTool {
+  id: string;
+  name: string;
+  args?: any;
+  result?: ChatMessageToolResult;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  tools?: ChatMessageTool[];
 }
 
 export interface Chat {

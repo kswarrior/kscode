@@ -43,7 +43,7 @@ func Default() Settings {
 			DefaultProvider: "gemini",
 			Providers: []Provider{
 				{ID: "gemini", Name: "Google Gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta", Enabled: false, Note: "Set GEMINI_API_KEY"},
-				{ID: "nvidia", Name: "NVIDIA NIM", BaseURL: "https://integrate.api.nvidia.com/v1", Enabled: false, Note: "Set NVIDIA_API_KEY"},
+				{ID: "nvidia", Name: "NVIDIA NIM", BaseURL: "https://integrate.api.nvidia.com/v1", Enabled: false, Note: "Set NVIDIA_API_KEY", Models: []string{"meta/llama-3.1-8b-instruct", "meta/llama-3.1-70b-instruct", "nvidia/nemotron-3-super-120b-a12b"}},
 				{ID: "openai", Name: "OpenAI", BaseURL: "https://api.openai.com/v1", Enabled: false, Note: "Set OPENAI_API_KEY"},
 				{ID: "anthropic", Name: "Anthropic", BaseURL: "https://api.anthropic.com/v1", Enabled: false, Note: "Set ANTHROPIC_API_KEY"},
 			},

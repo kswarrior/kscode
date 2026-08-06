@@ -10,6 +10,7 @@ import type {
   ChatResponse,
   Project,
   Chat,
+  ChatMessageTool,
   AgentEvent,
   AgentRunRequest,
 } from "../types";
@@ -90,6 +91,16 @@ export const api = {
       req<Chat>(`/chats/append`, {
         method: "POST",
         body: JSON.stringify({ projectId, chatId, role, content }),
+      }),
+    upsert: (
+      projectId: string,
+      chatId: string,
+      content: string,
+      tools: ChatMessageTool[] = [],
+    ) =>
+      req<Chat>(`/chats/upsert`, {
+        method: "POST",
+        body: JSON.stringify({ projectId, chatId, content, tools }),
       }),
     remove: (projectId: string, chatId: string) =>
       req<{ chats: Chat[] }>(`/chats/delete`, {

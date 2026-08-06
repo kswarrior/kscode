@@ -88,7 +88,9 @@ func Run(ctx context.Context, llmClient *llm.Client, cfg RunConfig, onEvent func
 	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds <= 0 {
-		maxRounds = 50
+		// Effectively unbounded — only stop when the task is done or the
+		// caller cancels the context. See RunWithContext for rationale.
+		maxRounds = 100000
 	}
 	system := cfg.System
 	if system == "" {
@@ -139,6 +141,20 @@ func Run(ctx context.Context, llmClient *llm.Client, cfg RunConfig, onEvent func
 		// Parse any tool_call blocks from this round.
 		calls := parseToolCalls(assistantText)
 		if len(calls) == 0 {
+			if round < maxRounds && hasNonToolFencedCode(assistantText) {
+				msgs = append(msgs, llm.Message{
+					Role: "user",
+					Content: "You pasted code in the chat without running it. Code in the chat does NOT execute — only a ```tool_call block does. To apply that code, use the `write` or `edit` tool:\n\n```tool_call\n{\"name\":\"write\",\"args\":{\"path\":\"<file>\",\"content\":\"<the code you just wrote>\"}}\n```\nIf the task is actually already complete and verified, reply with ONLY a short prose summary and no code blocks.",
+				})
+				continue
+			}
+			if round < maxRounds && isTrivialReply(assistantText) {
+				msgs = append(msgs, llm.Message{
+					Role: "user",
+					Content: "That reply did not make any progress on the task. Either: (1) if there is real work to do, briefly state your plan in one sentence then emit ONE ```tool_call block to start (e.g. `ls {\"path\":\".\"}` or `read`), or (2) if the user's message is just a greeting / conversational with no coding task, reply with ONE short prose sentence that actually helps them (e.g. ask what they'd like to build or which file to work on). Do not simply echo the user's words.",
+				})
+				continue
+			}
 			// No more tools — the assistant is finished answering.
 			safeEmit(onEvent, Event{Tag: EventDone, Round: round})
 			return finalText.String(), nil
@@ -208,9 +224,13 @@ func streamWithRetry(
 	onDelta func(llm.Delta),
 	onEvent func(Event),
 ) error {
+	// NEVER give up on transient upstream errors: retry indefinitely with
+	// exponential backoff capped at 60s. The agent only stops when the task
+	// is genuinely done OR the user cancels. This matches the requested
+	// behavior: "never stop anything, retry every time".
 	const (
-		baseDelay    = 1 * time.Second
-		maxAttempts  = 7              // ~1+2+4+8+16+32+mkdir => covers ~1 min
+		baseDelay   = 1 * time.Second
+		maxDelay    = 60 * time.Second
 	)
 
 	for attempt := 0; ; attempt++ {
@@ -221,30 +241,42 @@ func streamWithRetry(
 		msg := strings.ToLower(err.Error())
 
 		// "streaming not supported" is a permanent fallback signal, not a
-		// transient error — switch to non-streaming Chat once.
+		// transient error — switch to non-streaming Chat once. If that also
+		// fails, treat the failure like any other upstream error: retry rather
+		// than killing the whole task.
 		if strings.Contains(msg, "streaming not supported") {
 			resp, ferr := client.Chat(ctx, req)
-			if ferr != nil {
-				safeEmit(onEvent, Event{Tag: EventError, Error: ferr.Error(), Round: round})
-				return ferr
+			if ferr == nil {
+				onDelta(llm.Delta{Delta: resp.Content})
+				return nil
 			}
-			onDelta(llm.Delta{Delta: resp.Content})
-			return nil
+			// Fall through to the retry path below, reusing the error from
+			// the fallback Chat call so the UI shows what actually failed.
+			err = ferr
+			msg = strings.ToLower(err.Error())
 		}
 
-		// Non-transient errors (auth, bad model, missing key, 400/404) abort.
+		// Non-transient errors (auth, bad model, missing key, 400/404) used to
+		// abort the run. Now we surface them as a retry event too — the caller
+		// (run loop) treats them as recoverable by asking the model to retry,
+		// rather than killing the whole task. We still return the error here so
+		// the run loop can decide how to handle it (it will nudge-and-continue).
 		if !isTransientError(msg) {
-			safeEmit(onEvent, Event{Tag: EventError, Error: err.Error(), Round: round})
-			return err
+			safeEmit(onEvent, Event{Tag: EventRetry, Round: round, Attempt: attempt + 1, DelayMs: int(baseDelay / time.Millisecond), Error: err.Error()})
+			// Wait briefly (still cancellable), then keep retrying on the SAME
+			// round. Many "non-transient" errors are actually transient in
+			// practice (e.g. a 400 from a momentary provider hiccup), and
+			// retrying is always safer than killing a long-running task.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff(attempt, baseDelay, maxDelay)):
+			}
+			continue
 		}
 
-		// Transient: retry with exponential backoff, up to maxAttempts.
-		if attempt >= maxAttempts {
-			safeEmit(onEvent, Event{Tag: EventError, Error: fmt.Sprintf("giving up after %d retries: %s", maxAttempts, err.Error()), Round: round})
-			return err
-		}
-
-		delay := baseDelay << uint(attempt) // 1s, 2s, 4s, 8s, 16s, 32s, 64s(cap)
+		// Transient: retry with exponential backoff, capped, indefinitely.
+		delay := backoff(attempt, baseDelay, maxDelay)
 		safeEmit(onEvent, Event{
 			Tag:     EventRetry,
 			Round:   round,
@@ -260,6 +292,18 @@ func streamWithRetry(
 		case <-time.After(delay):
 		}
 	}
+}
+
+// backoff returns baseDelay * 2^attempt, capped at maxDelay.
+func backoff(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
+	if attempt <= 0 {
+		return baseDelay
+	}
+	d := baseDelay << uint(attempt)
+	if d <= 0 || d > maxDelay {
+		return maxDelay
+	}
+	return d
 }
 
 // isTransientError reports whether an LLM upstream error is worth retrying.
@@ -286,40 +330,330 @@ func isTransientError(msg string) bool {
 // toolCallBlock matches a ```tool_call fenced block and captures the JSON.
 var toolCallBlock = regexp.MustCompile("(?s)```tool_call\\s*\\n(.*?)\\n```")
 
-// parseToolCalls extracts all ```tool_call blocks from assistant text and
-// returns them as parsed ToolCall structs. Malformed JSON is skipped with
-// a synthesized "error" tool result inline — but callers handle that.
-func parseToolCalls(text string) []ToolCall {
-	matches := toolCallBlock.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return nil
+// Generic fenced block: ```lang\n<body>\n``` (lang = json, tool, etc.). Used
+// as a lenient fallback for weaker models that write ```json instead of
+// ```tool_call, or omit the language tag entirely.
+var genericFenced = regexp.MustCompile("(?s)```[a-zA-Z0-9_+-]*\\s*\\n(.*?)\\n```")
+
+// A bare JSON object (no fence) whose top-level keys look like a tool call:
+// {"name":"...","args":{...}} or {"tool":"...","args":{...}}. This rescues
+// models that just print the JSON with no code fence. Unlike a regex, this
+// uses a brace/quote-aware scan so it matches inline (mid-line) tool blobs
+// and arbitrary nested/multi-line args — the case where a regex with anchors
+// (^...$) and a fixed body pattern silently fails (e.g. the model writes the
+// call mid-sentence, or args span many lines like a long file content).
+var bareToolNameRe = regexp.MustCompile(`"\s*(name|tool|function)"\s*:\s*"[^"]+"`)
+
+// findBareToolJSON scans text for a tool-call shaped JSON object starting at
+// the given index. It handles string literals (ignoring braces inside them)
+// and returns the full { ... } substring, or "" if none at i.
+func findBareToolJSON(text string, i int) string {
+	n := len(text)
+	// Caller guarantees text[i] == '{' (the body of a JSON object start).
+	if i >= n || text[i] != '{' {
+		return ""
 	}
-	calls := make([]ToolCall, 0, len(matches))
-	for i, m := range matches {
-		raw := strings.TrimSpace(m[1])
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-			// Skip malformed tool call; the model will see no result and
-			// usually self-correct on the next round.
+	depth := 0
+	inStr := false
+	esc := false
+	start := i
+	for i < n {
+		c := text[i]
+		if inStr {
+			if esc {
+				esc = false
+			} else if c == '\\' {
+				esc = true
+			} else if c == '"' {
+				inStr = false
+			}
+		} else {
+			switch c {
+			case '"':
+				inStr = true
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+				if (c == '}') && depth == 0 {
+					return text[start : i+1]
+				}
+				if depth < 0 {
+					return "" // unbalanced
+				}
+			}
+		}
+		i++
+	}
+	return ""
+}
+
+// extractToolFromJSON tries to parse a JSON blob into a ToolCall. It accepts
+// the canonical {"name","args"} shape, the {"tool","args"} shape, and falls
+// back to {"name","arguments"} / {"tool","arguments"} / {"name","parameters"}.
+//
+// It is LENIENT about one extremely common model mistake: printing the
+// "content" arg with RAW (unescaped) control characters inside the JSON
+// string literal — e.g. real newlines instead of "\n". Strict
+// encoding/json rejects those ("invalid character '\n' in string literal"),
+// which left such calls un-parsed, so the file was never written and the
+// raw JSON streamed into the chat. We repair the obvious offenders (raw
+// newlines / tabs inside strings) by re-escaping them, then retry.
+func extractToolFromJSON(raw string) (ToolCall, bool) {
+	parsed, ok := tryParseToolObj(raw)
+	if ok {
+		return parsed, true
+	}
+	// Lenient repair: re-escape raw newlines / tabs / carriage returns that
+	// appear OUTSIDE any JSON string boundary we can detect is broken. The
+	// safe approach is to walk the blob and, while inside a string literal,
+	// replace a raw \n/\r/\t with its escaped form. This handles the common
+	// case (and only that case) without a full JSON validator.
+	repaired := escapeRawControlInStrings(raw)
+	if repaired != raw {
+		if p, ok2 := tryParseToolObj(repaired); ok2 {
+			return p, true
+		}
+	}
+	return ToolCall{}, false
+}
+
+// tryParseToolObj is the strict path: unmarshal and pull name/args.
+func tryParseToolObj(raw string) (ToolCall, bool) {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return ToolCall{}, false
+	}
+	name, _ := parsed["name"].(string)
+	if name == "" {
+		name, _ = parsed["tool"].(string)
+	}
+	if name == "" {
+		name, _ = parsed["function"].(string)
+	}
+	if name == "" {
+		return ToolCall{}, false
+	}
+	// args may live under "args", "arguments", "parameters", or "input".
+	argsRaw, ok := parsed["args"]
+	if !ok {
+		argsRaw, ok = parsed["arguments"]
+	}
+	if !ok {
+		argsRaw, ok = parsed["parameters"]
+	}
+	if !ok {
+		argsRaw, ok = parsed["input"]
+	}
+	if !ok {
+		argsRaw = map[string]any{}
+	}
+	args, _ := json.Marshal(argsRaw)
+	return ToolCall{Name: name, Args: args}, true
+}
+
+// escapeRawControlInStrings walks a JSON-shaped blob and re-escapes raw
+// newline (\n), carriage return (\r) and tab (\t) bytes that occur INSIDE a
+// string literal (i.e. between unescaped double quotes). Bytes outside
+// strings are left untouched. This lets encoding/json parse blobs where the
+// model printed multi-line file content with real newlines instead of the
+// required \n escape.
+func escapeRawControlInStrings(raw string) string {
+	var out strings.Builder
+	out.Grow(len(raw) + 8)
+	inStr := false
+	esc := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if inStr {
+			if esc {
+				out.WriteByte(c)
+				esc = false
+				continue
+			}
+			switch c {
+			case '\\':
+				out.WriteByte(c)
+				esc = true
+			case '"':
+				out.WriteByte(c)
+				inStr = false
+			case '\n':
+				out.WriteString(`\n`)
+			case '\r':
+				out.WriteString(`\r`)
+			case '\t':
+				out.WriteString(`\t`)
+			default:
+				out.WriteByte(c)
+			}
 			continue
 		}
-		name, _ := parsed["name"].(string)
-		if name == "" {
+		if c == '"' {
+			inStr = true
+		}
+		out.WriteByte(c)
+	}
+	return out.String()
+}
+
+// parseToolCalls extracts tool calls from assistant text using several
+// strategies, in order of preference, so weak models that don't follow the
+// canonical ```tool_call format still get parsed:
+//  1. canonical ```tool_call fenced blocks
+//  2. any fenced block (```json / ```tool / ```) whose body parses as a tool
+//  3. a bare JSON object on its own line with name+args keys
+func parseToolCalls(text string) []ToolCall {
+	var calls []ToolCall
+	seen := map[string]bool{}
+
+	add := func(c ToolCall) {
+		key := c.Name + string(c.Args)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		c.ID = fmt.Sprintf("t%d", len(calls)+1)
+		calls = append(calls, c)
+	}
+
+	// 1) Canonical ```tool_call blocks.
+	for _, m := range toolCallBlock.FindAllStringSubmatch(text, -1) {
+		if c, ok := extractToolFromJSON(strings.TrimSpace(m[1])); ok {
+			add(c)
+		}
+	}
+	if len(calls) > 0 {
+		return calls
+	}
+
+	// 2) Generic fenced blocks (```json, ```tool, bare ```). Skip blocks that
+	//    look like ordinary code (no name/tool key) when paused here.
+	for _, m := range genericFenced.FindAllStringSubmatch(text, -1) {
+		body := strings.TrimSpace(m[1])
+		if c, ok := extractToolFromJSON(body); ok {
+			add(c)
+		}
+	}
+	if len(calls) > 0 {
+		return calls
+	}
+
+	// 3) Bare JSON tool object anywhere in the text (no fence at all). Use a
+	//    brace-aware scan rather than an anchored regex so inline blobs and
+	//    arbitrarily nested/multi-line args are rescued — a regex with ^...$
+	//    anchors silently misses the common case where the model writes the
+	//    call mid-sentence or spreads args across many lines.
+	for i := 0; i < len(text); i++ {
+		if text[i] != '{' {
 			continue
 		}
-		args, _ := json.Marshal(parsed["args"])
-		calls = append(calls, ToolCall{
-			ID:   fmt.Sprintf("t%d", i+1),
-			Name: name,
-			Args: args,
-		})
+		blob := findBareToolJSON(text, i)
+		if blob == "" {
+			continue
+		}
+		// Heuristic: only treat as a tool call if it has a name/tool key.
+		if !bareToolNameRe.MatchString(blob) {
+			continue
+		}
+		if c, ok := extractToolFromJSON(blob); ok {
+			add(c)
+			// Skip past the matched blob to avoid re-scanning its interior.
+			i += len(blob) - 1
+		}
 	}
 	return calls
 }
 
-// hasToolCallBlock reports whether the text contains any ```tool_call fenced
-// block at all (even if malformed). Used to distinguish "model finished"
-// from "model tried to call a tool but it was malformed".
+// hasToolCallBlock reports whether the text contains any fenced code block at
+// all (so a malformed tool attempt is distinguished from "model finished").
 func hasToolCallBlock(text string) bool {
-	return toolCallBlock.FindStringSubmatchIndex(text) != nil
+	if toolCallBlock.FindStringSubmatchIndex(text) != nil {
+		return true
+	}
+	if genericFenced.FindStringSubmatchIndex(text) != nil {
+		return true
+	}
+	// Bare inline JSON tool object anywhere (brace-aware scan).
+	for i := 0; i < len(text); i++ {
+		if text[i] != '{' {
+			continue
+		}
+		blob := findBareToolJSON(text, i)
+		if blob != "" && bareToolNameRe.MatchString(blob) {
+			if _, ok := extractToolFromJSON(blob); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
+
+// fencedCodeRe matches any fenced code block (```lang\n...\n```) that is NOT
+// a tool_call. Used to detect models that dump finished code in the chat
+// instead of running a tool, so the loop can nudge them.
+var fencedCodeRe = regexp.MustCompile("(?s)```([a-zA-Z0-9_+-]*)\\s*\\n[\\s\\S]*?\\n```")
+
+// hasNonToolFencedCode reports whether the text has a fenced code block whose
+// language tag is something other than tool_call (e.g. js, go, python),
+// which means the model pasted code instead of calling a tool.
+func hasNonToolFencedCode(text string) bool {
+	for _, m := range fencedCodeRe.FindAllStringSubmatch(text, -1) {
+		lang := strings.ToLower(strings.TrimSpace(m[1]))
+		if lang == "tool_call" || lang == "tool" {
+			continue
+		}
+		// If the body parses as a tool call, it's a lenient tool block — not
+		// stray code. hasToolCallBlock already covers that path.
+		body := strings.TrimSpace(m[0])
+		body = strings.TrimPrefix(body, "```"+m[1])
+		body = strings.TrimSpace(strings.TrimSuffix(body, "```"))
+		if _, ok := extractToolFromJSON(body); ok {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isTrivialReply reports whether an assistant reply (with no tool calls and
+// no code blocks) is so short/substantive-less that it almost certainly just
+// mirrored the user's input (e.g. saying "hi" back to "hi") instead of doing
+// the task. We treat a reply as trivial when, after stripping whitespace and
+// common greeting/markdown noise, it is under ~12 characters and doesn't
+// contain a question mark or a verb hint of an answer.
+func isTrivialReply(text string) bool {
+	// Strip code fences (already known to be non-tool or absent) and trim.
+	s := strings.TrimSpace(stripToolCallMarkers(text))
+	if s == "" {
+		return true
+	}
+	// Drop surrounding markdown emphasis / list markers / quotes.
+	for _, p := range []string{"*", "_", "`", "#", ">", "-", "+"} {
+		s = strings.Trim(s, p)
+	}
+	s = strings.TrimSpace(s)
+	// A real answer usually contains a question or more than a handful of
+	// words. A bare greeting / single word is trivial.
+	if len(s) >= 12 {
+		return false
+	}
+	if strings.Contains(s, "?") {
+		return false
+	}
+	// Count words: a single token like "hi", "hello", "ok", "yes" is trivial.
+	if len(strings.Fields(s)) <= 1 {
+		return true
+	}
+	return false
+}
+
+// stripToolCallMarkers removes any ```tool_call fences and leftover
+// {tool_call} markers so the triviality check looks at the prose only.
+func stripToolCallMarkers(text string) string {
+	s := toolCallBlock.ReplaceAllString(text, "")
+	s = genericFenced.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "{tool_call}", "")
+	return s
+}
+

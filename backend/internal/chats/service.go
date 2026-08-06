@@ -14,8 +14,24 @@ import (
 // Message stores a single chat turn. Content is set on user turns; the
 // streamed response is appended later by Update().
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content string          `json:"content"`
+	Tools   []MessageTool   `json:"tools,omitempty"`
+}
+
+// MessageTool records a tool invocation that happened during an assistant
+// turn, so cards can be reconstructed when a chat is reopened.
+type MessageTool struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Args   json.RawMessage `json:"args,omitempty"`
+	Result *MessageToolResult `json:"result,omitempty"`
+}
+
+// MessageToolResult is the outcome of a single tool call.
+type MessageToolResult struct {
+	OK     bool   `json:"ok"`
+	Output string `json:"output"`
 }
 
 type Chat struct {
@@ -171,7 +187,43 @@ func (s *Store) AppendMessage(projectID, chatID, role, content string) (Chat, er
 	return Chat{}, errors.New("chat not found")
 }
 
-// Remove deletes a chat.
+// UpsertAssistant records (or updates) the final assistant turn for a single
+// user prompt. If the last message in the chat is already an assistant
+// message (from a prior incremental save in the same turn), it is REPLACED
+// in place with the new content + tools; otherwise a new assistant message
+// is appended. This makes the per-turn save idempotent: calling it many times
+// during a run never accumulates duplicate assistant rows — the chat only
+// ever holds ONE assistant message per user turn.
+func (s *Store) UpsertAssistant(projectID, chatID, content string, tools []MessageTool) (Chat, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, c := range s.data.ByProject[projectID] {
+		if c.ID != chatID {
+			continue
+		}
+		msgs := c.Messages
+		if n := len(msgs); n > 0 && msgs[n-1].Role == "assistant" {
+			// Replace the in-progress assistant turn in place.
+			msgs[n-1] = Message{
+				Role:    "assistant",
+				Content: content,
+				Tools:   tools,
+			}
+		} else {
+			// No trailing assistant message yet — append a fresh one.
+			msgs = append(msgs, Message{
+				Role:    "assistant",
+				Content: content,
+				Tools:   tools,
+			})
+		}
+		c.Messages = msgs
+		c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		s.data.ByProject[projectID][i] = c
+		return c, s.save()
+	}
+	return Chat{}, errors.New("chat not found")
+}
 func (s *Store) Remove(projectID, chatID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

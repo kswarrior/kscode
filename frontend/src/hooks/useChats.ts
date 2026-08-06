@@ -76,6 +76,26 @@ export function useChats(project: Project | null) {
     }
   };
 
+  // Ensure there is an active chat. If one is already selected, return it;
+  // otherwise create a new one, select it (so it appears in the sidebar)
+  // and return it. Used by the chat composer when the user sends a prompt
+  // from the "no chat selected" state — the chat is auto-created on first
+  // message and shows up in the sidebar list immediately.
+  const ensureChat = async (): Promise<ActiveChat | null> => {
+    if (!project) return null;
+    if (activeChat) return activeChat;
+    try {
+      const c = await api.chats.create(project.id);
+      setChats((cur) => [c, ...cur]);
+      const ac: ActiveChat = { id: c.id, title: c.title, messages: [], provider: c.provider, model: c.model };
+      setActiveChat(ac);
+      return ac;
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+      return null;
+    }
+  };
+
   const handleOpen = async (c: Chat) => {
     if (!project) return;
     try {
@@ -143,6 +163,7 @@ export function useChats(project: Project | null) {
     setRenaming,
     reload,
     newChat,
+    ensureChat,
     handleOpen,
     removeChat,
     startRename,

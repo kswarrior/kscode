@@ -161,14 +161,43 @@
   gap: 8px;
 }
 
+/* Steps pill + Send button grouped on the right edge (ModelPicker sits left). */
+.chat-send-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* "Steps done/total" counter shown to the left of the Send/Stop button while
+   the agent is running, so progress is visible without expanding a list. */
+.steps-pill {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  color: var(--fg-1);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+}
+
+/* Smaller, compact Send / Stop buttons. */
 .chat-send,
 .chat-send.btn,
 .chat-send.btn-primary {
-  width: 44px;
+  width: 34px;
+  flex: 0 0 34px;
+  height: 34px;
   padding: 0 !important;
-  flex: 0 0 44px;
-  height: 44px;
-  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
 }
 .chat-stop {
   background: rgba(255, 122, 122, 0.15);
@@ -177,6 +206,70 @@
 }
 .chat-stop:hover { background: rgba(255, 122, 122, 0.25); }
 .chat-input button:disabled { opacity: 0.4; cursor: default; }
+
+/* Steps pill + dropdown */
+.steps-dropdown {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+}
+.steps-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  color: var(--fg-1);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.steps-pill:hover { background: rgba(255, 255, 255, 0.1); }
+.steps-chevron-open { transform: rotate(180deg); transition: transform .12s ease; }
+
+.steps-dropdown-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 260px;
+  max-width: 360px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--glass-strong-bg, rgba(18, 18, 24, 0.95));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  padding: 4px;
+}
+.steps-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--fg-1);
+  cursor: default;
+  transition: background .1s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.steps-dropdown-item:hover { background: rgba(255, 255, 255, 0.06); }
+.steps-dd-num { color: var(--fg-3); font-weight: 600; flex: 0 0 22px; }
+.steps-dd-name { color: var(--accent, #4ec9b0); font-weight: 600; flex: 0 0 70px; }
+.steps-dd-args { flex: 1; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; }
+.steps-dd-status { flex: 0 0 auto; font-weight: 600; }
+.steps-dd-status.ok { color: var(--success, #4ec9b0); }
+.steps-dd-status.err { color: var(--danger, #f48771); }
 
 /* ----- ModelPicker: transparent, minimal, white text ----- */
 .mp {
@@ -204,6 +297,11 @@
 .mp-trigger:hover { opacity: 1; }
 .mp-trigger .icon,
 .mp-trigger svg { opacity: 0.7; }
+
+/* "Select model" placeholder state — muted to signal nothing is picked yet. */
+.mp-trigger-empty { color: var(--fg-2); opacity: 0.6; font-style: italic; }
+.mp-trigger-empty:hover { opacity: 0.9; }
+.mp-trigger-empty .mp-label::before { content: none; }
 
 .mp-label {
   white-space: nowrap;

@@ -272,7 +272,62 @@ export function SettingsPanel() {
 }
 
 /* ------------------------------------------------------------------ *
- * ProviderEditor — sub-page form for adding/editing a provider with
+ * ProviderCard \u2014 simple card showing provider name + 3-dot menu.
+ * ------------------------------------------------------------------ */
+function ProviderCard({
+  provider,
+  onEdit,
+  onDisconnect,
+  onDelete,
+}: {
+  provider: Provider;
+  onEdit: () => void;
+  onDisconnect: () => void;
+  onDelete: () => void;
+}) {
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  return (
+    <div className="provider-card">
+      <div className="pc-info">
+        <span className="pc-name">{provider.name}</span>
+        {!provider.enabled && <span className="pc-badge">disconnected</span>}
+      </div>
+      <div className="pc-menu" ref={menuRef}>
+        <button className="icon-btn" onClick={() => setShowMenu(!showMenu)} aria-label="More options">
+          <IconMoreVertical size={16} />
+        </button>
+        {showMenu && (
+          <ul className="pc-menu-dropdown glass-strong" role="menu">
+            <li role="menuitem" className="pc-menu-item" onClick={() => { onEdit(); setShowMenu(false); }}>
+              <IconEdit size={14} /> Edit
+            </li>
+            <li role="menuitem" className="pc-menu-item" onClick={() => { onDisconnect(); setShowMenu(false); }}>
+              <IconClose size={14} /> Disconnect
+            </li>
+            <li role="menuitem" className="pc-menu-item danger" onClick={() => { onDelete(); setShowMenu(false); }}>
+              <IconTrash size={14} /> Delete
+            </li>
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * ProviderEditor \u2014 sub-page form for adding/editing a provider with
  * name, base URL, API key, and models.
  * ------------------------------------------------------------------ */
 function ProviderEditor({
@@ -375,59 +430,6 @@ function ProviderEditor({
         <button className="btn btn-primary" onClick={onSave}>
           {isAdd ? "Add Provider" : "Save Changes"}
         </button>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- * ProviderCard — a single connected-provider row in the providers list.
- * Shows the provider name, its model count, and Edit / Disconnect actions.
- * ------------------------------------------------------------------ */
-function ProviderCard({
-  provider,
-  onEdit,
-  onDisconnect,
-  onDelete,
-}: {
-  provider: Provider;
-  onEdit: () => void;
-  onDisconnect: () => void;
-  onDelete: () => void;
-}) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  return (
-    <div className="sp-provider-card">
-      <div className="sp-provider-info">
-        <span className="sp-provider-name">{provider.name || provider.id}</span>
-        {provider.models && provider.models.length > 0 && (
-          <span className="sp-provider-models">
-            {provider.models.length} model{provider.models.length === 1 ? "" : "s"}
-          </span>
-        )}
-        {provider.baseUrl && (
-          <span className="sp-provider-url" title={provider.baseUrl}>{provider.baseUrl}</span>
-        )}
-      </div>
-      <div className="sp-provider-actions">
-        <button className="btn btn-ghost" onClick={onEdit} title="Edit provider">
-          <IconEdit size={13} /> <span>Edit</span>
-        </button>
-        <button className="btn btn-ghost" onClick={onDisconnect} title="Disconnect provider">
-          <IconClose size={13} /> <span>Disconnect</span>
-        </button>
-        {confirmDelete ? (
-          <span className="sp-confirm-row">
-            <button className="btn btn-danger" onClick={onDelete} title="Confirm delete">
-              <IconTrash size={13} /> <span>Confirm</span>
-            </button>
-            <button className="btn btn-ghost" onClick={() => setConfirmDelete(false)}>Cancel</button>
-          </span>
-        ) : (
-          <button className="btn btn-ghost" onClick={() => setConfirmDelete(true)} title="Delete provider (also removes saved key)">
-            <IconTrash size={13} />
-          </button>
-        )}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { FileEntry } from "../../types";
 import { api } from "../../api/client";
 import {
@@ -13,8 +13,12 @@ import {
   IconDownload,
   IconUpload,
   IconLink,
+  IconRefresh,
+  IconSearch,
+  IconClose,
 } from "../Icon";
 import { DropdownMenu } from "../DropdownMenu";
+import { FileDialog } from "./FileDialog";
 import "./FileTree.css";
 import "../DropdownMenu.css";
 
@@ -32,6 +36,7 @@ interface NodeProps {
   depth: number;
   onOpen: (path: string) => void;
   onRefresh: (path?: string) => void;
+  openFileDialog: (mode: "file" | "folder", parentPath: string) => void;
 }
 
 function TreeIcon({ name, isDir, open }: { name: string; isDir: boolean; open: boolean }) {
@@ -40,7 +45,7 @@ function TreeIcon({ name, isDir, open }: { name: string; isDir: boolean; open: b
   return <IconFile size={15} />;
 }
 
-function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
+function TreeNode({ node, depth, onOpen, onRefresh, openFileDialog }: NodeProps) {
   const [expanded, setExpanded] = useState(depth < 2);
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -51,36 +56,6 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
     e.stopPropagation();
     if (node.isDir) setExpanded((v) => !v);
     else onOpen(node.path);
-  };
-
-  const doMkdir = async () => {
-    const name = prompt("New folder name:");
-    if (!name) return;
-    setBusy(true);
-    try {
-      await api.files.mkdir(node.path === "/" ? "/" + name : node.path + "/" + name);
-      onRefresh();
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const doNewFile = async () => {
-    const name = prompt("New file name:");
-    if (!name) return;
-    setBusy(true);
-    try {
-      const p = node.path === "/" ? "/" + name : node.path + "/" + name;
-      await api.files.write(p, "");
-      onOpen(p);
-      onRefresh();
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setBusy(false);
-    }
   };
 
   const doDelete = async () => {
@@ -157,8 +132,8 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
   ];
 
   const folderActions = [
-    { label: "New Folder", onClick: doMkdir, icon: <IconPlus size={14} /> },
-    { label: "New File", onClick: doNewFile, icon: <IconFile size={14} /> },
+    { label: "New Folder", onClick: () => openFileDialog("folder", node.path), icon: <IconPlus size={14} /> },
+    { label: "New File", onClick: () => openFileDialog("file", node.path), icon: <IconFile size={14} /> },
     { divider: true },
     { label: "Download as ZIP", onClick: handleDownloadZip, icon: <IconDownload size={14} /> },
     { label: "Upload File", onClick: () => fileInputRef.current?.click(), icon: <IconUpload size={14} /> },
@@ -220,6 +195,7 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
               depth={depth + 1}
               onOpen={onOpen}
               onRefresh={onRefresh}
+              openFileDialog={openFileDialog}
             />
           ))}
         </ul>
@@ -231,6 +207,16 @@ function TreeNode({ node, depth, onOpen, onRefresh }: NodeProps) {
 export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Props) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showFileDialog, setShowFileDialog] = useState<{ mode: "file" | "folder"; parentPath: string } | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (showSearch) {
+      setTimeout(() => searchInputRef.current?.focus(), 0);
+    }
+  }, [showSearch]);
 
   const handleDownloadProject = () => {
     const url = api.files.downloadProject();
@@ -263,6 +249,14 @@ export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Pro
     }
   };
 
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setShowSearch(false);
+    // Navigate to search results - we'll use the SearchPanel for this
+    // For now, just close and let the parent handle it
+  };
+
   const headerActions = [
     { label: "Download Project as ZIP", onClick: handleDownloadProject, icon: <IconDownload size={14} /> },
     { divider: true },
@@ -270,18 +264,87 @@ export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Pro
     { label: "Upload from URL", onClick: handleUploadUrlProject, icon: <IconLink size={14} /> },
   ];
 
-  if (loading) return <div className="filetree"><div className="ft-status">Loading...</div></div>;
-  if (error) return <div className="filetree"><div className="ft-error">Error: {error}</div></div>;
-  if (!entry) return <div className="filetree"><div className="ft-status">No workspace</div></div>;
+  const openFileDialog = (mode: "file" | "folder", parentPath: string) => {
+    setShowFileDialog({ mode, parentPath });
+  };
+
+  const closeFileDialog = () => {
+    setShowFileDialog(null);
+  };
+
+  const handleFileDialogSubmit = async (name: string) => {
+    if (!showFileDialog) return;
+    setUploading(true);
+    try {
+      const fullPath = showFileDialog.parentPath === "/" ? "/" + name : showFileDialog.parentPath + "/" + name;
+      if (showFileDialog.mode === "folder") {
+        await api.files.mkdir(fullPath);
+      } else {
+        await api.files.write(fullPath, "");
+        onOpen(fullPath);
+      }
+      onRefresh();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setUploading(false);
+      closeFileDialog();
+    }
+  };
+
+  if (error) return <div className="filetree"><div className="ft-header"><span className="ft-title">EXPLORER</span><button className="ft-refresh" onClick={() => onRefresh()} aria-label="Refresh" title="Refresh"><IconRefresh size={16} /></button><DropdownMenu items={headerActions} alignRight /></div><div className="ft-error">Error: {error}</div></div>;
+  if (!entry) return <div className="filetree"><div className="ft-header"><span className="ft-title">EXPLORER</span><button className="ft-refresh" onClick={() => onRefresh()} aria-label="Refresh" title="Refresh"><IconRefresh size={16} /></button><DropdownMenu items={headerActions} alignRight /></div><div className="ft-status">No workspace</div></div>;
   return (
     <div className="filetree">
       <div className="ft-header">
         <span className="ft-title">EXPLORER</span>
-        <DropdownMenu items={headerActions} alignRight />
+        <div className="ft-header-actions">
+          <button className="ft-search-btn" onClick={() => setShowSearch(!showSearch)} aria-label="Search" title="Search">
+            <IconSearch size={16} />
+          </button>
+          <button className="ft-refresh" onClick={() => onRefresh()} aria-label="Refresh" title="Refresh">
+            <IconRefresh size={16} />
+          </button>
+          <DropdownMenu items={headerActions} alignRight />
+        </div>
       </div>
+      {showSearch && (
+        <form className="ft-search-bar" onSubmit={handleSearch}>
+          <IconSearch size={16} className="ft-search-icon" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") setShowSearch(false); }}
+            placeholder="Search files..."
+            className="ft-search-input"
+            autoFocus
+          />
+          <button type="button" className="ft-search-close" onClick={() => { setShowSearch(false); setSearchQuery(""); }} aria-label="Close search">
+            <IconClose size={14} />
+          </button>
+        </form>
+      )}
       <div className="ft-root-label" title={root}>{root || "workspace"}</div>
       <ul className="ft-list">
-        <TreeNode node={entry} depth={0} onOpen={onOpen} onRefresh={onRefresh} />
+        {loading ? (
+          <>
+            <li className="ft-skeleton"><div className="ft-skeleton-row"></div></li>
+            <li className="ft-skeleton"><div className="ft-skeleton-row"></div></li>
+            <li className="ft-skeleton"><div className="ft-skeleton-row"></div></li>
+            <li className="ft-skeleton"><div className="ft-skeleton-row"></div></li>
+            <li className="ft-skeleton"><div className="ft-skeleton-row"></div></li>
+          </>
+        ) : (
+          <TreeNode
+            node={entry}
+            depth={0}
+            onOpen={onOpen}
+            onRefresh={onRefresh}
+            openFileDialog={openFileDialog}
+          />
+        )}
       </ul>
       <input
         ref={fileInputRef}
@@ -293,6 +356,14 @@ export function FileTree({ entry, root, loading, error, onOpen, onRefresh }: Pro
           e.target.value = "";
         }}
       />
+      {showFileDialog && (
+        <FileDialog
+          mode={showFileDialog.mode}
+          parentPath={showFileDialog.parentPath}
+          onClose={closeFileDialog}
+          onSubmit={handleFileDialogSubmit}
+        />
+      )}
     </div>
   );
 }

@@ -21,6 +21,7 @@ func (h *ChatsHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chats/create", h.handleCreate)
 	mux.HandleFunc("/api/chats/rename", h.handleRename)
 	mux.HandleFunc("/api/chats/append", h.handleAppend)
+	mux.HandleFunc("/api/chats/upsert", h.handleUpsert)
 	mux.HandleFunc("/api/chats/meta", h.handleMeta)
 	mux.HandleFunc("/api/chats/delete", h.handleDelete)
 }
@@ -126,6 +127,34 @@ func (h *ChatsHandler) handleAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.store.AppendMessage(req.ProjectID, req.ChatID, req.Role, req.Content)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// handleUpsert records or replaces the final assistant turn for a user
+// prompt. Idempotent within a turn: it replaces the trailing assistant
+// message if one exists, so repeated calls during a run never accumulate
+// duplicate assistant messages. Carries tool-call cards so they render on
+// reopen.
+func (h *ChatsHandler) handleUpsert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req struct {
+		ProjectID string                  `json:"projectId"`
+		ChatID    string                  `json:"chatId"`
+		Content   string                  `json:"content"`
+		Tools     []chats.MessageTool     `json:"tools"`
+	}
+	if err := parseJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, err := h.store.UpsertAssistant(req.ProjectID, req.ChatID, req.Content, req.Tools)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

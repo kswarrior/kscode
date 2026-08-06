@@ -83,6 +83,14 @@ export function CodeEditor({ filePath, ui, onSaved }: Props) {
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      // Don't intercept Ctrl/Cmd+S when a terminal (or any xterm textarea) is
+      // focused — the user wants the keystroke to reach the shell as a Ctrl-S
+      // (XOFF flow control) instead of triggering a file save in the editor.
+      const ae = document.activeElement;
+      if (ae && (ae.closest?.(".terminal-host") || ae.closest?.(".xterm") ||
+                 (ae as HTMLElement)?.classList?.contains("xterm-helper-textarea"))) {
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         save();

@@ -14,20 +14,17 @@ import { TerminalsPanel } from "../Terminal/TerminalsPanel";
 import { TerminalsList } from "../Terminal/TerminalsList";
 import { ProjectDropdownMenu } from "../ChatsPanel/ProjectDropdownMenu";
 import { ProjectFormDialog } from "../ChatsPanel/ProjectFormDialog";
-import { SearchPanel } from "../Search/SearchPanel";
 import {
   IconChat,
   IconClose,
   IconFiles,
   IconLogo,
   IconMenu,
-  IconSearch,
   IconSettings,
   IconTerminal,
 } from "../Icon";
 import "./WorkspaceLayout.css";
 
-type SidebarTab = "explorer" | "search";
 // Which "page" is shown in the main area. Header + sidebar persist across pages.
 type MainPage = "chat" | "editor" | "settings" | "terminal";
 
@@ -38,7 +35,6 @@ export function WorkspaceLayout() {
   const chats = useChats(projects.active);
   const terminals = useTerminals(projects.active);
   const [activePath, setActivePath] = useState<string | null>(null);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("explorer");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mainPage, setMainPage] = useState<MainPage>("chat");
   const [isMobile, setIsMobile] = useState(false);
@@ -92,7 +88,6 @@ export function WorkspaceLayout() {
   };
   const handleSearchOpen = (path: string) => {
     setActivePath(path);
-    setSidebarTab("explorer");
     setMainPage("editor");
     if (isMobile) setSidebarOpen(false);
   };
@@ -185,42 +180,14 @@ export function WorkspaceLayout() {
                 onOpenTerminal={() => { if (isMobile) setSidebarOpen(false); }}
               />
             ) : (
-              <>
-                <div className="sidebar-tabs">
-                  <button
-                    className={sidebarTab === "explorer" ? "active" : ""}
-                    onClick={() => setSidebarTab("explorer")}
-                  >
-                    <IconFiles /> <span>Files</span>
-                  </button>
-                  <button
-                    className={sidebarTab === "search" ? "active" : ""}
-                    onClick={() => setSidebarTab("search")}
-                  >
-                    <IconSearch /> <span>Search</span>
-                  </button>
-                  <button
-                    className="sidebar-close icon-btn"
-                    onClick={() => setSidebarOpen(false)}
-                    aria-label="Close sidebar"
-                    title="Close sidebar"
-                  >
-                    <IconClose size={14} />
-                  </button>
-                </div>
-                {sidebarTab === "explorer" ? (
-                  <FileTree
-                    entry={ws.tree}
-                    root={ws.root}
-                    loading={ws.loading}
-                    error={ws.error}
-                    onOpen={handleOpen}
-                    onRefresh={() => ws.refresh()}
-                  />
-                ) : (
-                  <SearchPanel onOpen={handleSearchOpen} />
-                )}
-              </>
+              <FileTree
+                entry={ws.tree}
+                root={ws.root}
+                loading={ws.loading}
+                error={ws.error}
+                onOpen={handleOpen}
+                onRefresh={() => ws.refresh()}
+              />
             )}
           </aside>
         )}
